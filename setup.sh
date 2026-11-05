@@ -288,6 +288,7 @@ mkdir -p "$ROOT/re/dump"
 [ -s "$ROOT/re/dump/msvcr90.bin" ] || { tail -n 15 "$STATE/dump-msv.log"; die "could not dump msvcr90 image (see .setup/dump-msv.log)"; }
 [ -s "$ROOT/re/dump/blur_runtime.bin" ] || { tail -n 15 "$STATE/dump-exe.log"; die "could not dump the game image (see .setup/dump-exe.log). Is the CPU/emulator OK? See README, Troubleshooting."; }
 note "re/dump/blur_runtime.bin $(wc -c < "$ROOT/re/dump/blur_runtime.bin" | tr -d ' ') bytes, re/dump/msvcr90.bin $(wc -c < "$ROOT/re/dump/msvcr90.bin" | tr -d ' ') bytes"
+"$PY" "$ROOT/tools/gen_script_bindings.py" "$ROOT/re/dump/blur_runtime.bin" "$ROOT/port/work/net-re/script_bindings.txt" || die "could not generate Lua binding table"
 
 if [ "$INTERP_ONLY" = 1 ]; then
   cp -f "$ROOT/port/harness/blurrt_interp" "$ROOT/port/harness/blurrt"

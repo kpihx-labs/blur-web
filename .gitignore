@@ -31,6 +31,7 @@ port/harness/web/gpu-warm.json
 port/work/interp/difftest
 port/work/interp/unit_test
 port/work/shader-cache/out/
+port/work/net-re/script_bindings.txt
 
 # Build products and scratch
 *.o
@@ -54,5 +55,7 @@ port/tools/regress/out/
 port/tools/regress/refs/
 port/pack/stage*/
 node_modules/
+__pycache__/
+*.pyc
 .DS_Store
 *.swp
