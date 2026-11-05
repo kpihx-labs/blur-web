@@ -46,7 +46,12 @@ const browserArgs = () => {
   console.log(`GPU ${renderer}`);
   if (/SwiftShader/i.test(renderer) && process.env.BLUR_SWIFTSHADER !== '1') throw new Error(`software renderer refused: ${renderer}`);
   const key = async (k, hold = 200) => { await p.keyboard.down(k); await sleep(hold); await p.keyboard.up(k); };
-  const stat = () => p.evaluate(() => { const s = document.getElementById('stats').textContent, m = /draws\/frame (\d+)/.exec(s), skipped = /skipped (\d+)/.exec(s), f = document.getElementById('fps').textContent; return { draws: m ? +m[1] : 0, skipped: skipped ? +skipped[1] : 0, fps: f, wireMB: +(window.__wire.bytes / 1048576).toFixed(0), js: (/JS ([\d.]+) ms/.exec(s) || [])[1], hc: window.__hc && window.__hc.summary() }; });
+  let maxDraws = 0;
+  const stat = async () => {
+    const value = await p.evaluate(() => { const s = document.getElementById('stats').textContent, m = /draws\/frame (\d+)/.exec(s), skipped = /skipped (\d+)/.exec(s), f = document.getElementById('fps').textContent; return { draws: m ? +m[1] : 0, skipped: skipped ? +skipped[1] : 0, fps: f, wireMB: +(window.__wire.bytes / 1048576).toFixed(0), js: (/JS ([\d.]+) ms/.exec(s) || [])[1], hc: window.__hc && window.__hc.summary() }; });
+    maxDraws = Math.max(maxDraws, value.draws);
+    return { ...value, maxDraws };
+  };
   const t0 = Date.now(), el = () => ((Date.now() - t0) / 1000) | 0; let n = 0;
   const shot = async (tag) => { await p.screenshot({ path: `${pre}.${tag}.png` }); console.log(el(), tag, JSON.stringify(await stat())); };
   if (process.env.HYB) { await sleep(+process.env.HYB * 1000); await shot('a_hyb'); } else {
@@ -55,6 +60,6 @@ const browserArgs = () => {
   while (el() < +secs) { await key('Enter'); await sleep(8000); console.log(el(), 'S', JSON.stringify(await stat())); if (++n % 3 === 0) await shot('c' + String(el()).padStart(3, '0')); }
   await shot('final');
   const final = await stat();
-  if (final.draws < 10 || final.skipped > 1000) throw new Error(`invalid render state: ${JSON.stringify(final)}`);
+  if (maxDraws < 500 || final.skipped > 1000) throw new Error(`race not reached or invalid render state: ${JSON.stringify(final)}`);
   await b.close();
 })();
