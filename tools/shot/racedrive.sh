@@ -6,7 +6,8 @@ set -euo pipefail
 # env: BIN=<blurrt path relative to port/harness> (default ./blurrt)   PORT (default 8792; never use 8080/8081/8765)   PROF=<chromium profile dir> (keep it to reuse the page's IndexedDB cache; default /tmp/blur-racedrive/prof_<tag>)
 #      DRIVER=<page script> (default racedrive.js; livetest.js = renderer comparison with console/memory/stats capture)
 #      WORK=<scratch dir> (default /tmp/blur-racedrive): save copy, logs <tag>.host.log / <tag>.page.log, shots/<tag>.*.png
-# how the keys are split: the HOST injects title Enter, Down, Enter (= 'Skip' on the Online Account dialog) with BLUR_KEYS, relative to Lua events (seconds, SEEDACCT=0);
+# how the keys are split: the HOST drives title, account skip, warning and
+# single-player selection with frame-relative Lua events (SEEDACCT=0);
 #   the PAGE (racedrive.js, puppeteer keyboard) starts pressing Enter every 8 s after 45 s: warning Ok, single player, career movie (~9 GB of Bink frames), career menus, race.
 # Uses a fresh copy of port/harness/save per tag. Kills only the game it started.
 TAG=${1:?tag}; FRAG=${2:-}; SECS=${3:-230}; shift 3
@@ -16,7 +17,7 @@ WORK=${WORK:-${XDG_CACHE_HOME:-$HOME/.cache}/blur-web/racedrive}; PORT=${PORT:-8
   mkdir -p "$WORK/save_$TAG"
   [ ! -d "$H/save" ] || cp -R "$H/save/." "$WORK/save_$TAG/"
 }
-K="Enter@L:StopScoreboardRequests+6s,Down@L:ReadOnlineAccountDetails+8s,Enter@L:ReadOnlineAccountDetails+10s"
+K="Enter@L:StopScoreboardRequests+60,Down@L:ReadOnlineAccountDetails+150,Enter@L:ReadOnlineAccountDetails+175,Enter@L:ReadOnlineAccountDetails+260,Enter@L:ReadOnlineAccountDetails+340,Enter@L:ReadOnlineAccountDetails+440"
 (
   cd "$H"
   exec env BLUR_PAR=1 BLUR_RECOMP=1 BLUR_WEB="$PORT" BLUR_SEEDACCT=0 BLUR_SAVEDIR="$WORK/save_$TAG" BLUR_KEYS="$K" "$@" "${BIN:-./blurrt}" ../../game/extracted/BLUR/Blur.exe
