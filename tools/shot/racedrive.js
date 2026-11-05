@@ -21,7 +21,6 @@ const browserPath = () => {
 const browserArgs = () => {
   const args = [
     '--window-size=1320,900',
-    '--enable-unsafe-swiftshader',
     '--no-first-run',
     '--disable-default-apps',
     '--disable-background-networking',
@@ -29,6 +28,8 @@ const browserArgs = () => {
     '--disable-sync',
   ];
   if (process.platform === 'darwin') args.push('--use-angle=metal');
+  if (process.platform === 'linux') args.push('--enable-gpu', `--use-angle=${process.env.BLUR_ANGLE || 'vulkan'}`);
+  if (process.env.BLUR_SWIFTSHADER === '1') args.push('--enable-unsafe-swiftshader');
   return args;
 };
 
@@ -36,6 +37,14 @@ const browserArgs = () => {
   const [url, secs, pre] = process.argv.slice(2);
   const b = await puppeteer.launch({ executablePath: browserPath(), headless: 'new', userDataDir: process.env.PROF || '/tmp/blur-trackA/prof_drv', args: browserArgs(), defaultViewport: { width: 1320, height: 900 } });
   const p = await b.newPage(); await p.goto(url); await p.bringToFront();
+  const renderer = await p.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl2');
+    const debug = gl && gl.getExtension('WEBGL_debug_renderer_info');
+    return debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : 'unknown';
+  });
+  console.log(`GPU ${renderer}`);
+  if (/SwiftShader/i.test(renderer) && process.env.BLUR_SWIFTSHADER !== '1') throw new Error(`software renderer refused: ${renderer}`);
   const key = async (k, hold = 200) => { await p.keyboard.down(k); await sleep(hold); await p.keyboard.up(k); };
   const stat = () => p.evaluate(() => { const s = document.getElementById('stats').textContent, m = /draws\/frame (\d+)/.exec(s), skipped = /skipped (\d+)/.exec(s), f = document.getElementById('fps').textContent; return { draws: m ? +m[1] : 0, skipped: skipped ? +skipped[1] : 0, fps: f, wireMB: +(window.__wire.bytes / 1048576).toFixed(0), js: (/JS ([\d.]+) ms/.exec(s) || [])[1], hc: window.__hc && window.__hc.summary() }; });
   const t0 = Date.now(), el = () => ((Date.now() - t0) / 1000) | 0; let n = 0;
