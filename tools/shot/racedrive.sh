@@ -11,11 +11,14 @@
 TAG=${1:?tag}; FRAG=${2:-}; SECS=${3:-230}; shift 3
 HERE=$(cd "$(dirname "$0")" && pwd); H=$HERE/../../port/harness
 WORK=${WORK:-/tmp/blur-racedrive}; PORT=${PORT:-8792}; mkdir -p "$WORK/shots"
-[ -d "$WORK/save_$TAG/userprofile" ] || { mkdir -p "$WORK/save_$TAG"; cp -R "$H/save/." "$WORK/save_$TAG/"; }
+[ -d "$WORK/save_$TAG/userprofile" ] || {
+  mkdir -p "$WORK/save_$TAG"
+  [ ! -d "$H/save" ] || cp -R "$H/save/." "$WORK/save_$TAG/"
+}
 K="Enter@L:StopScoreboardRequests+6s,Down@L:ReadOnlineAccountDetails+8s,Enter@L:ReadOnlineAccountDetails+10s"
-cd "$H" && env BLUR_PAR=1 BLUR_RECOMP=1 BLUR_WEB=$PORT BLUR_SEEDACCT=0 BLUR_SAVEDIR="$WORK/save_$TAG" BLUR_KEYS="$K" "$@" ${BIN:-./blurrt} ../../game/extracted/BLUR/Blur.exe > "$WORK/$TAG.host.log" 2>&1 &
+cd "$H" && env BLUR_PAR=1 BLUR_RECOMP=1 BLUR_WEB="$PORT" BLUR_SEEDACCT=0 BLUR_SAVEDIR="$WORK/save_$TAG" BLUR_KEYS="$K" "$@" "${BIN:-./blurrt}" ../../game/extracted/BLUR/Blur.exe > "$WORK/$TAG.host.log" 2>&1 &
 HP=$!
 sleep 4
-cd "$HERE" && HYB=45 PROF=${PROF:-$WORK/prof_$TAG} node ${DRIVER:-racedrive.js} "http://127.0.0.1:$PORT/#$FRAG" "$SECS" "$WORK/shots/$TAG" > "$WORK/$TAG.page.log" 2>&1
+cd "$HERE" && HYB=45 PROF=${PROF:-$WORK/prof_$TAG} node "${DRIVER:-racedrive.js}" "http://127.0.0.1:$PORT/#$FRAG" "$SECS" "$WORK/shots/$TAG" > "$WORK/$TAG.page.log" 2>&1
 kill $HP 2>/dev/null; sleep 2; kill -9 $HP 2>/dev/null
 grep " S " "$WORK/$TAG.page.log" | tail -5
