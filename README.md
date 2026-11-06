@@ -97,7 +97,7 @@ Homebrew if missing, a few minutes), builds the shader corpus from your game fil
 pack step itself takes under a minute once `naga` exists. An optional **shader cache** for WebGL2
 (`tools/build_shader_cache.sh`, or `./setup.sh <game> --shaders`) removes most shader-compile hitches there.
 
-Page flags go in the URL hash and can be combined with `&`: `#hud=1` frame-time HUD, `#gpu=1` WebGPU (the default from `play.sh`), `#gpu=0` WebGL2, `#diag=1` draw
+Page flags go in the URL hash and can be combined with `&`: `#hud=1` frame-time HUD, `#gpu=1` WebGPU (the default from `play.sh`), `#gpu=0` WebGL2, `#lang=en` or `#lang=fr` wrapper/HUD locale (canonical regional tags such as `fr-FR` select the matching base catalog), `#diag=1` draw
 statistics, `#glcache=0` turn off the redundant-GL-call filter, `#mirror=full|half|auto`.
 
 ## Controls

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Blur (emulated)</title>
+<html lang="en"><head><meta charset="utf-8"><title>Blur</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   html,body{margin:0;height:100%;background:#0b0b0d;color:#c8c8d0;font:13px/1.4 ui-monospace,Menlo,monospace}
@@ -21,16 +21,22 @@
   #log{max-height:22vh;overflow:auto;padding:6px 12px;background:#101014;border-top:1px solid #26262e;white-space:pre-wrap;color:#9a9aa8}
 </style></head><body>
 <div id="wrap">
-  <div id="bar"><b>Blur on WebGL2</b><span id="status" class="bad">connecting…</span><span id="inputmode" title="what the game sees as its input device">input: keyboard</span><span id="fps"></span><span id="stats"></span></div>
-  <div id="ui"><button id="fsbtn" title="Fullscreen (F11 or double-click the picture)">⛶ Fullscreen</button><button id="menubtn" title="Show / hide panels">☰ Panels</button>
-    <div id="menu"><label><input type="checkbox" autocomplete="off" id="cb-bar" checked> Status bar</label><label><input type="checkbox" autocomplete="off" id="cb-log"> Log</label><label><input type="checkbox" autocomplete="off" id="cb-hud"> Frame-time HUD (F2)</label><div class="hint">F11 / double-click = fullscreen</div></div></div>
+  <div id="bar"><b id="brand">Blur on WebGL2</b><span id="status" class="bad">connecting…</span><span id="inputmode">input: keyboard</span><span id="fps"></span><span id="stats"></span></div>
+  <div id="ui"><button id="fsbtn">⛶ Fullscreen</button><button id="menubtn">☰ Panels</button>
+    <div id="menu"><label><input type="checkbox" autocomplete="off" id="cb-bar" checked> <span id="label-bar">Status bar</span></label><label><input type="checkbox" autocomplete="off" id="cb-log"> <span id="label-log">Log</span></label><label><input type="checkbox" autocomplete="off" id="cb-hud"> <span id="label-hud">Frame-time HUD</span> (F2)</label><div class="hint" id="fs-hint">F11 / double-click = fullscreen</div></div></div>
   <div id="stage"><canvas id="c" width="1280" height="720" tabindex="0"></canvas></div>
   <div id="log"></div>
 </div>
+<script src="locale.js"></script>
 <script src="input.js"></script>
 <script src="renderer.js"></script>
 <script src="hcache.js"></script>
 <script>(async () => {
+  const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const L = BlurLocale.fromHash(location.hash); globalThis.BlurLocaleCurrent = L; document.documentElement.lang = L.locale;
+  document.getElementById('brand').textContent = L.t('brand_gl'); document.getElementById('status').textContent = L.t('connecting'); document.getElementById('inputmode').textContent = L.t('input_keyboard');
+  document.getElementById('fsbtn').textContent = '⛶ ' + L.t('fullscreen'); document.getElementById('menubtn').textContent = '☰ ' + L.t('panels');
+  document.getElementById('label-bar').textContent = L.t('status_bar'); document.getElementById('label-log').textContent = L.t('log'); document.getElementById('label-hud').textContent = L.t('hud'); document.getElementById('fs-hint').textContent = L.t('fullscreen_hint');
   let canvas = document.getElementById('c'); const statusEl = document.getElementById('status'), logEl = document.getElementById('log');
   const log = (m) => { logEl.textContent += m + '\n'; logEl.scrollTop = logEl.scrollHeight; };
   // #gpu=1: WebGPU renderer (renderer_gpu.js + the offline WGSL pack); any failure (no navigator.gpu / adapter / texture-compression-bc, init error, later device loss) falls back to WebGL2
@@ -40,14 +46,14 @@
   async function makeRenderer() {
     let why = ''; try { why = sessionStorage.getItem('blur.gpufail') || ''; sessionStorage.removeItem('blur.gpufail'); } catch (e) {}
     if (why) { console.warn('[gpu] WebGPU lost earlier, running WebGL2: ' + why); note('WebGPU lost (' + why.slice(0, 80) + '): WebGL2'); }
-    if (/gpu=1/.test(location.hash) && !why) {
+    if (hashParams.get('gpu') === '1' && !why) {
       let g = null;
       try {
         if (!navigator.gpu) throw new Error('navigator.gpu is missing (WebGPU needs a secure context: https or localhost)');
         await Promise.all([loadScript('wgslpack.js'), loadScript('renderer_gpu.js')]);
         g = new D3D9GpuRenderer(canvas, log); await g.init({ packUrl: 'blur.wgslpack.gz', requireBC: true });
-        g.onLost = (info) => { console.warn('[gpu] device lost, reloading with WebGL2: ' + info.message); try { sessionStorage.setItem('blur.gpufail', 'device lost: ' + info.message); } catch (e) {} location.hash = location.hash.replace(/gpu=1/, 'gpu=0'); location.reload(); };
-        g.loadWarm('gpu-warm.json'); document.querySelector('#bar b').textContent = 'Blur on WebGPU'; return g;
+        g.onLost = (info) => { console.warn('[gpu] device lost, reloading with WebGL2: ' + info.message); try { sessionStorage.setItem('blur.gpufail', 'device lost: ' + info.message); } catch (e) {} hashParams.set('gpu', '0'); location.hash = hashParams.toString(); location.reload(); };
+        g.loadWarm('gpu-warm.json'); document.getElementById('brand').textContent = L.t('brand_gpu'); return g;
       } catch (e) {
         console.warn('[gpu] WebGPU renderer unavailable, using WebGL2:', e); note('WebGPU unavailable (' + String(e.message || e).slice(0, 90) + '): using WebGL2');
         if (g && g.ctx) { const c2 = canvas.cloneNode(false); canvas.replaceWith(c2); canvas = c2; }          // a canvas that already has a webgpu context cannot give out webgl2
@@ -78,8 +84,8 @@
   let ws, frames = 0, last = performance.now(), msgs = 0, bytes = 0, presented = 0;
   function connect() {
     ws = new WebSocket(`ws://${location.host}/ws`); ws.binaryType = 'arraybuffer'; window.__ws = ws;
-    ws.onopen = () => { statusEl.textContent = inputBlocked ? 'connected; configured input disabled (see log)' : 'connected'; statusEl.className = inputBlocked ? 'bad' : 'ok'; hc.ready.then(() => { if (ws.readyState === 1) hc.announce(ws); }); };
-    ws.onclose = (e) => { audioFadeOut(); au.faded = true; const busy = e.code === 1013; statusEl.textContent = busy ? 'another viewer is connected - retrying every 3 s' : 'disconnected - retrying'; statusEl.className = 'bad'; setTimeout(connect, busy ? 3000 : 1000); };
+    ws.onopen = () => { statusEl.textContent = L.t(inputBlocked ? 'connected_input_disabled' : 'connected'); statusEl.className = inputBlocked ? 'bad' : 'ok'; hc.ready.then(() => { if (ws.readyState === 1) hc.announce(ws); }); };
+    ws.onclose = (e) => { audioFadeOut(); au.faded = true; const busy = e.code === 1013; statusEl.textContent = L.t(busy ? 'viewer_busy' : 'disconnected_retrying'); statusEl.className = 'bad'; setTimeout(connect, busy ? 3000 : 1000); };
     ws.onmessage = (e) => {
       bytes += e.data.byteLength; window.__wire.bytes += e.data.byteLength; window.__wire.msgs++;
       hc.onData(e.data, (n) => { msgs += n.messages; frames += n.presents;
@@ -137,7 +143,7 @@
   // input -> harness (NetInput: 5 x int32: type,a,b,c,d). 1=key down(vk) 2=key up(vk) 3=mouse move(x,y) 4=mouse button(btn,down) 5=wheel
   const send = (t, a = 0, b = 0, c = 0, d = 0) => { if (ws && ws.readyState === 1) ws.send(new Int32Array([t, a, b, c, d]).buffer); };
   let lastObservedInputAt = 0;
-  if (location.hash.includes('telemetry=1')) {
+  if (hashParams.get('telemetry') === '1') {
     setTimeout(() => send(14, r.constructor.name.includes('Gpu') ? 1 : 2), 1000);
     setInterval(() => { const p = r.perf ? r.perf(120) : {}; if (!p.frames) return; const heap = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : -1; send(12, Math.round(p.avg * 1000), Math.round(p.p99 * 1000), p.gpuMs > 0 ? Math.round(p.gpuMs * 1000) : -1, heap); }, 2000);
   }
@@ -156,13 +162,13 @@
   const sendPad = () => {
     if (inputBlocked) return;
     const selected = readPad(); const now = performance.now();
-    if (!selected) { if (padWasActive) { padWasActive = false; padKey = ''; send(6, 0, 0, 0, 0); setMode('input: keyboard', 'kb'); } return; }
+    if (!selected) { if (padWasActive) { padWasActive = false; padKey = ''; send(6, 0, 0, 0, 0); setMode(L.t('input_keyboard'), 'kb'); } return; }
     const [g, d] = selected;
     const state = BlurInput.gamepadState(g, d);
     const btn = state.bits, lt = state.leftTrigger, rt = state.rightTrigger;
     const lx = state.leftX, ly = state.leftY, rx = state.rightX, ry = state.rightY;
     const key = [btn, lt, rt, lx, ly, rx, ry].join(',');
-    if (key !== padKey || now - padSentAt > 250 || !padWasActive) { if (key !== padKey) lastObservedInputAt = now; padKey = key; padSentAt = now; padWasActive = true; send(6, btn | (lt << 16) | (rt << 24), (lx & 0xffff) | (ly << 16), (rx & 0xffff) | (ry << 16), 1); setMode('input: controller (' + (g.id || 'gamepad').slice(0, 40) + ')', 'pad'); }
+    if (key !== padKey || now - padSentAt > 250 || !padWasActive) { if (key !== padKey) lastObservedInputAt = now; padKey = key; padSentAt = now; padWasActive = true; send(6, btn | (lt << 16) | (rt << 24), (lx & 0xffff) | (ly << 16), (rx & 0xffff) | (ry << 16), 1); setMode(L.t('input_controller') + ' (' + (g.id || 'gamepad').slice(0, 40) + ')', 'pad'); }
   };
   setInterval(sendPad, 8);
   window.addEventListener('gamepaddisconnected', () => sendPad());
@@ -172,7 +178,7 @@
   const hudOn = () => !!(r.hud && r.hud.c && r.hud.c.style.display !== 'none');
   const setHud = (on) => { if (on === hudOn() && r.hud) return; window.dispatchEvent(new Event('blur-toggle-hud')); };
   const applyPanels = () => { document.body.classList.toggle('hide-bar', !cbBar.checked); document.body.classList.toggle('hide-log', !cbLog.checked); store.set('bar', cbBar.checked); store.set('log', cbLog.checked); store.set('hud', cbHud.checked); };
-  cbBar.checked = store.get('bar', true); cbLog.checked = store.get('log', false); cbHud.checked = location.hash.includes('hud=1') || store.get('hud', false);
+  cbBar.checked = store.get('bar', true); cbLog.checked = store.get('log', false); cbHud.checked = hashParams.get('hud') === '1' || store.get('hud', false);
   cbBar.onchange = cbLog.onchange = applyPanels; cbHud.onchange = () => { setHud(cbHud.checked); applyPanels(); }; applyPanels();
   if (cbHud.checked) setTimeout(() => { if (!hudOn()) setHud(true); }, 300);
   document.getElementById('menubtn').onclick = () => { uiEl.classList.toggle('open'); };
@@ -185,7 +191,7 @@
   { let idleT = 0; const wake = () => { document.body.classList.remove('idle-cursor'); clearTimeout(idleT); idleT = setTimeout(() => document.body.classList.add('idle-cursor'), 2000); };      // hide the pointer after 2 s without movement
     document.addEventListener('mousemove', wake); document.addEventListener('mousedown', wake); wake(); }
   document.getElementById('fsbtn').onclick = () => { toggleFs(); canvas.focus(); };
-  document.addEventListener('fullscreenchange', () => { document.getElementById('fsbtn').textContent = document.fullscreenElement ? '⛶ Exit fullscreen' : '⛶ Fullscreen'; });
+  document.addEventListener('fullscreenchange', () => { document.getElementById('fsbtn').textContent = '⛶ ' + L.t(document.fullscreenElement ? 'exit_fullscreen' : 'fullscreen'); });
   window.addEventListener('keydown', (e) => { const action = hotkeys.get(e.code); if (!action) return; e.preventDefault(); if (e.repeat) return; if (action === 'fullscreen') toggleFs(); else if (action === 'hud') window.dispatchEvent(new Event('blur-toggle-hud')); else if (action === 'release_inputs') releaseAll(); }, true);
   window.addEventListener('keydown', (e) => { if (hotkeys.has(e.code)) return; if (inputBlocked) { e.preventDefault(); return; } const k = mappedVk(e); if (!k) { e.preventDefault(); return; } lastObservedInputAt = performance.now(); if (!e.repeat || !held.has(e.code)) { held.set(e.code, k); send(1, k); if (e.code === 'Backspace') send(1, 46); } if (e.code !== 'F12') e.preventDefault(); });
   window.addEventListener('keyup', (e) => { if (hotkeys.has(e.code)) { e.preventDefault(); return; } const k = held.has(e.code) ? held.get(e.code) : mappedVk(e); held.delete(e.code); if (k) send(2, k); if (e.code === 'Backspace') send(2, 46); e.preventDefault(); });

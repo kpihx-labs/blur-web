@@ -5,7 +5,10 @@
 // #hcache=0 disables everything (the page announces "disabled" and the host sends plain uploads, exactly as before).
 // Protocol: see gfx.c. Page -> host: [0x48430A, flags, count, hashes...] announce, [0x48430C, 0, count, hashes...] "stored" acks. Host -> page: 98 tagged upload (store after use), 96 reference (rebuild from cache).
 (() => {
-  const H = location.hash, VERIFY = /hcverify=1/.test(location.hash), off = /hcache=0/.test(H), capMB = (/hcmb=(\d+)/.exec(H) || [0, 1536])[1] | 0;
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const VERIFY = hash.get('hcverify') === '1', off = hash.get('hcache') === '0';
+  const requestedCap = hash.get('hcmb');
+  const capMB = /^\d{1,5}$/.test(requestedCap || '') ? Math.min(16384, Math.max(1, Number(requestedCap))) : 1536;
   const MEM_CAP = 192 << 20, NW = { 21: 8, 31: 2 };
   const hex = (lo, hi) => (hi >>> 0).toString(16).padStart(8, '0') + (lo >>> 0).toString(16).padStart(8, '0');
   const req = (rq) => new Promise((res, rej) => { rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });

@@ -1,6 +1,7 @@
 // Second batch of Win32 API implementations: virtual filesystem, time, system info, window/display queries,
 // crypto, winsock placeholders, and defined failures for Bink / DirectX until those phases land.
 #include "emu.h"
+#include "blur_locale.h"
 static uint32_t packet;      // XInput packet number (file scope so it can be snapshotted)
 #include <ctype.h>
 #include <dirent.h>
@@ -29,7 +30,7 @@ static uint32_t t_handle(Ctx *c, uint32_t *a) { UNUSED; return 0x30001; }
 static uint32_t t_err2(Ctx *c, uint32_t *a) { UNUSED; return 2; }                // ERROR_FILE_NOT_FOUND
 static uint32_t t_fail(Ctx *c, uint32_t *a) { UNUSED; return 0x80004005u; }      // E_FAIL
 static uint32_t t_nodata(Ctx *c, uint32_t *a) { UNUSED; return getenv("BLUR_NETOFF") ? 232 : 0; }          // ERROR_NO_DATA: no network adapters (offline)
-static uint32_t t_lcid(Ctx *c, uint32_t *a) { UNUSED; return 0x409; }             // en-US (was 0 = LOCALE_NEUTRAL)
+static uint32_t t_lcid(Ctx *c, uint32_t *a) { UNUSED; return blur_language_id(); }
 static uint32_t t_nodev(Ctx *c, uint32_t *a) { UNUSED; return 1167; }
 hle_fn g_triv_fns[] = { t_0, t_1, t_m1, t_handle, t_err2, t_fail, t_nodata, t_nodev };   // for BLUR_ARGREC: which stubs are constant-return
             // ERROR_DEVICE_NOT_CONNECTED

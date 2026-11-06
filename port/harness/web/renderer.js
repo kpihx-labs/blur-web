@@ -27,9 +27,10 @@ const FMT_DXT1 = FOURCC('DXT1'), FMT_DXT3 = FOURCC('DXT3'), FMT_DXT5 = FOURCC('D
 
 class D3D9Renderer {
   constructor(canvas, log) {
-    this.dbg = /dbg/.test(location.hash);
+    const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+    this.dbg = hash.has('dbg');
     // quality options from the URL hash, e.g. #scale=2&msaa=4&aniso=16&bias=-0.5&srgb=1&hud=1   (all optional; applied at page load because render targets are sized then)
-    const hq = {}; for (const kv of location.hash.replace(/^#/, '').split('&')) { const [k, v] = kv.split('='); if (k) hq[k] = v === undefined ? '1' : v; }
+    const hq = {}; for (const [key, value] of hash) hq[key] = value || '1';
     this.q = { scale: Math.min(3, Math.max(0.5, parseFloat(hq.scale || '1') || 1)), msaa: parseInt(hq.msaa || '0') || 0, aniso: parseInt(hq.aniso || '1') || 1, bias: parseFloat(hq.bias || '0') || 0,
       srgb: hq.srgb === undefined ? 1 : parseInt(hq.srgb), hud: hq.hud === undefined ? 0 : parseInt(hq.hud), tri: hq.tri === undefined ? 1 : parseInt(hq.tri) };
     this.canvas = canvas; this.log = log || console.log;
@@ -37,10 +38,10 @@ class D3D9Renderer {
     if (!gl) throw new Error('WebGL2 not available');
     // Redundant-call filter: the draw path issues >100 GL calls per draw and Chrome's GPU process (ANGLE) pays for every one even when the state is
     // unchanged. All call sites go through these wrappers, so the shadow state is always exact. BLUR 'glcache=0' in the URL hash disables it.
-    if (/diag=1/.test(location.hash)) {       // count the GL calls that are really issued (this wrapper sits below the redundant-call filter), per frame, by function
+    if (hash.get('diag') === '1') {       // count the GL calls that are really issued (this wrapper sits below the redundant-call filter), per frame, by function
       const cnt = this.glCalls = {}; for (const k of Object.getOwnPropertyNames(WebGL2RenderingContext.prototype)) { if (k === 'constructor' || typeof gl[k] !== 'function') continue; const f = gl[k].bind(gl); gl[k] = (...a) => { cnt[k] = (cnt[k] || 0) + 1; return f(...a); }; }
     }
-    if (!/glcache=0/.test(location.hash)) {
+    if (hash.get('glcache') !== '0') {
       gl.__glc = true; const o = {}; for (const k of ['activeTexture', 'bindTexture', 'bindSampler', 'useProgram', 'bindBuffer', 'bindBufferRange', 'samplerParameteri', 'samplerParameterf', 'uniform1i', 'uniform1f', 'uniform2f',
         'deleteTexture', 'deleteBuffer', 'deleteSampler', 'deleteProgram']) o[k] = gl[k].bind(gl);
       let unit = 0; const tex = new Map(), smp = new Array(32).fill(null); let prog = null, arr = null, ubo = null; const uboR = new Array(16).fill(null);   // tex: (unit<<16|target) -> texture
@@ -99,7 +100,7 @@ class D3D9Renderer {
       s3tc: gl.getExtension('WEBGL_compressed_texture_s3tc'), aniso: gl.getExtension('EXT_texture_filter_anisotropic'),
       flin: gl.getExtension('OES_texture_float_linear'), par: gl.getExtension('KHR_parallel_shader_compile'),
     };
-    this.cache = new Map(); this.cacheShaders = new Map(); this.byHk = new Map(); this.warmByHk = new Map(); this.used = new Set(); this.asyncMode = /(^|[#;&])async\b/.test(location.hash); this.frameDeferred = false; this.holdRun = 0;     // async compile is OPT-IN (#async): in real Chrome and headless Chromium it left draws deferred forever (user run: skipped 19 / deferred 19 / held 17, models rendered wrong); sync is the default until fixed: a draw whose program is still compiling is skipped and the frame is not presented (last complete frame stays)
+    this.cache = new Map(); this.cacheShaders = new Map(); this.byHk = new Map(); this.warmByHk = new Map(); this.used = new Set(); this.asyncMode = hash.has('async'); this.frameDeferred = false; this.holdRun = 0;     // async compile is OPT-IN (#async): in real Chrome and headless Chromium it left draws deferred forever (user run: skipped 19 / deferred 19 / held 17, models rendered wrong); sync is the default until fixed: a draw whose program is still compiling is skipped and the frame is not presented (last complete frame stays)
     this.textures = new Map(); this.surfaces = new Map(); this.buffers = new Map(); this.shaders = new Map(); this.shaders.set(-1, { id: -1, pk: 'i-1', stage: 0, ins: [{ reg: 0, usage: 9, idx: 0, tex: 0 }, { reg: 1, usage: 5, idx: 0, tex: 0 }], outs: [{ reg: 1, usage: 5, idx: 0, tex: 0 }], glsl: FF_POSITIONT_VS }); this.vdecls = new Map();
     this.programs = new Map(); this.fbos = new Map(); this.warned = new Set();
     this.rs = new Uint32Array(256); this.ss = Array.from({ length: 32 }, () => new Uint32Array(16));
@@ -112,8 +113,8 @@ class D3D9Renderer {
     this.fbWarn = true; this.initDefaults(); this.initGL(); if (this.q.hud) this.initHud();
     // Rear-view mirror at half rate when the page cannot keep up: the mirror passes (576x96 target and the heavy 256x256 helper it is composed from) are ~28% of all draws.
     // #mirror=half always skips them on alternate frames, #mirror=auto does it only while the present-to-present interval stays above ~18 ms, #mirror=full never. Default: auto.
-    this.mirrorMode = (/mirror=(half|auto|full)/.exec(location.hash) || [0, 'auto'])[1]; this.mirrorOn = false; this.mirrorTouched = []; this.mirrorIv = 16.7; this.mirrorLast = 0; this.mirrorFrame = 0;
-    this.diag = /diag=1/.test(location.hash); this.diagFrames = []; this.rtCount = {};      // #diag=1: per-frame draw counts by render target (see tools/shot/diag.js)
+    this.mirrorMode = ['half', 'auto', 'full'].includes(hash.get('mirror')) ? hash.get('mirror') : 'auto'; this.mirrorOn = false; this.mirrorTouched = []; this.mirrorIv = 16.7; this.mirrorLast = 0; this.mirrorFrame = 0;
+    this.diag = hash.get('diag') === '1'; this.diagFrames = []; this.rtCount = {};      // #diag=1: per-frame draw counts by render target (see tools/shot/diag.js)
     window.addEventListener('blur-toggle-hud', () => { const first = !this.hud; this.initHud(); if (!first) this.hud.c.style.display = this.hud.c.style.display === 'none' ? '' : 'none'; });
   }
   initDefaults() {
@@ -172,13 +173,14 @@ class D3D9Renderer {
     return { frames: N, fps: N ? 1000 / avg : 0, avg, p50: s[Math.floor(N * 0.5)], p99: s[Math.floor(N * 0.99)], max: s[N - 1], gpuMs: this.gpuMs, gpuMax: this.gpuMax };
   }
   drawHud() {
+    const L = globalThis.BlurLocaleCurrent || { t: (key) => ({ hud_avg: 'avg', hud_max: 'max', hud_scale: 'scale', hud_off: 'off', hud_draws: 'draws', hud_gpu: 'gpu', hud_unavailable: 'n/a' })[key] || key };
     const h = this.hud, g = h.g, N = Math.min(h.n, 180); g.clearRect(0, 0, 420, 150); g.font = '11px ui-monospace,Menlo,monospace';
     let sum = 0, mx = 0; const v = []; for (let i = 0; i < N; i++) { const x = h.iv[(h.n - N + i) % 600]; v.push(x); sum += x; mx = Math.max(mx, x); }
     const avg = sum / (N || 1), s = v.slice().sort((a, b) => a - b), p99 = s[Math.floor(s.length * 0.99)] || 0, y0 = 150, k = 3;
     g.fillStyle = '#2a4'; g.fillRect(0, y0 - 16.67 * k, 420, 1); g.fillStyle = '#fff';
     for (let i = 0; i < N; i++) { const x = v[i]; g.fillStyle = x > 20 ? '#e55' : x > 17.5 ? '#ea3' : '#5c8'; g.fillRect(i * 2, y0 - Math.min(x, 48) * k, 2, Math.min(x, 48) * k); }
-    g.fillStyle = '#fff'; g.fillText(`${(1000 / avg).toFixed(1)} fps  avg ${avg.toFixed(1)} ms  p99 ${p99.toFixed(1)}  max ${mx.toFixed(1)}`, 4, 12);
-    g.fillText(`scale ${this.q.scale}x  msaa ${this.q.msaa || 'off'}  aniso ${this.q.aniso}x  bias ${this.q.bias}  draws ${this.stats.frameDraws}  gpu ${this.gpuMs ? this.gpuMs.toFixed(1) + ' ms' : 'n/a'}`, 4, 26);
+    g.fillStyle = '#fff'; g.fillText(`${(1000 / avg).toFixed(1)} fps  ${L.t('hud_avg')} ${avg.toFixed(1)} ms  p99 ${p99.toFixed(1)}  ${L.t('hud_max')} ${mx.toFixed(1)}`, 4, 12);
+    g.fillText(`${L.t('hud_scale')} ${this.q.scale}x  msaa ${this.q.msaa || L.t('hud_off')}  aniso ${this.q.aniso}x  bias ${this.q.bias}  ${L.t('hud_draws')} ${this.stats.frameDraws}  ${L.t('hud_gpu')} ${this.gpuMs ? this.gpuMs.toFixed(1) + ' ms' : L.t('hud_unavailable')}`, 4, 26);
   }
   statLine() { const s = this.stats, fr = this.jsFrames || 0, js = fr ? (this.jsBusy / fr).toFixed(1) : '-', mp = fr ? Math.round(this.jsMsgs / fr) : '-'; this.jsBusy = this.jsFrames = this.jsMsgs = 0;
     return `[b4 glcache ${this.gl.__glc ? 'on' : 'off'}] JS ${js} ms/frame  msgs/frame ${mp}  draws/frame ${s.frameDraws}  progs ${s.progs}  shaders ${s.shaders}  tex ${this.textures.size}  skipped ${s.skipped}  deferred ${s.deferred}  held ${s.held}`; }

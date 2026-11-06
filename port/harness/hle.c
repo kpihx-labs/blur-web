@@ -1,6 +1,7 @@
 // Win32 API implementations (high-level emulation). Single-threaded, no real OS behind it.
 // Each handler gets the guest stack arguments in a[]; the dispatcher does stdcall/cdecl cleanup.
 #include "emu.h"
+#include "blur_locale.h"
 #include <time.h>
 #include <ctype.h>
 #include <strings.h>
@@ -407,8 +408,8 @@ H(SetThreadPriority) { UNUSED; return 1; }
 H(GetThreadPriority) { UNUSED; return 0; }
 H(SetThreadAffinityMask) { UNUSED; return 0xff; }
 H(SetThreadIdealProcessor) { UNUSED; return 0; }
-H(GetUserDefaultLCID) { UNUSED; return 0x409; }                                                             // en-US
-H(GetUserDefaultLangID) { UNUSED; return 0x409; }
+H(GetUserDefaultLCID) { UNUSED; return blur_language_id(); }
+H(GetUserDefaultLangID) { UNUSED; return blur_language_id(); }
 H(RaiseException) { static int n; if (n++ < 8 && vlog(c)) fprintf(stderr, "[RaiseException] code=%08x flags=%x nargs=%u caller=%08x\n", a[0], a[1], a[2], g_api_ret); return 0; }     // 0x406D1388 = SetThreadName; anything else would unwind on Windows
 H(FlushFileBuffers) { Handle *o = hp(c, a[0]); if (!o || o->type != H_FILE) { set_err(c, 6); return 0; } if (o->fp) fflush(o->fp); return 1; }
 H(GetDriveTypeA) { UNUSED; return 3; }      // DRIVE_FIXED

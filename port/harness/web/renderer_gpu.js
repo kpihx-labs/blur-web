@@ -71,7 +71,8 @@ struct VO { @builtin(position) pos: vec4<f32>, @location(0) t0: vec4<f32> }
 class D3D9GpuRenderer {
   constructor(canvas, log) {
     this.canvas = canvas; this.log = log || console.log; this.warned = new Set();
-    this.dbg = new Set(((/gpudbg=([\w,]+)/.exec(location.hash) || [0, ''])[1]).split(','));      // debug switches: #gpudbg=nosrgb,noaniso,nomip,trimip,noatest
+    this.hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
+    this.dbg = new Set((this.hashParams.get('gpudbg') || '').split(',').filter((flag) => /^\w+$/.test(flag)));      // debug switches: #gpudbg=nosrgb,noaniso,nomip,trimip,noatest
     this.stats = { draws: 0, frameDraws: 0, clears: 0, skipped: 0, pipelines: 0, pipelineFail: 0, passes: 0, flushes: 0, tex: 0, bindGroups: 0, feedback: 0, fans: 0, shaders: 0, partialClears: 0, stretch: 0, uploads: 0 };
     this.textures = new Map(); this.surfaces = new Map(); this.buffers = new Map(); this.shaders = new Map(); this.vdecls = new Map();
     this.rs = new Uint32Array(256); this.ss = Array.from({ length: 32 }, () => new Uint32Array(16));
@@ -103,8 +104,8 @@ class D3D9GpuRenderer {
     this.q = dev.queue; this.bcOk = this.features.has('texture-compression-bc'); this.f32f = this.features.has('float32-filterable');
     dev.addEventListener('uncapturederror', (e) => this.warn('uncap' + e.error.message.slice(0, 80), 'uncaptured: ' + e.error.message.slice(0, 400)));
     dev.lost.then((i) => { this.lost = i; this.log('[gpu] device lost: ' + i.message); if (this.onLost) this.onLost(i); });
-    this.learn = !/gpulearn=0/.test(location.hash);
-    if (/gpudump=1/.test(location.hash)) { window.__gpuWarm = () => this.exportWarm(); setInterval(() => console.log(`[gpu] used pipelines ${this.recipes.size}, skipped total ${this.stats.skipped}, held ${this.stats.held || 0}`), 10000); }
+    this.learn = this.hashParams.get('gpulearn') !== '0';
+    if (this.hashParams.get('gpudump') === '1') { window.__gpuWarm = () => this.exportWarm(); setInterval(() => console.log(`[gpu] used pipelines ${this.recipes.size}, skipped total ${this.stats.skipped}, held ${this.stats.held || 0}`), 10000); }
     this.pack = await BWGP.load(opts.packUrl || 'pack/blur.wgslpack.gz'); this.bodyKey = opts.bodyKey || null;
     this.vin = this.pack.meta.vertexInput;
     this.ctx = this.canvas.getContext('webgpu'); this.cfmt = navigator.gpu.getPreferredCanvasFormat();
@@ -546,14 +547,15 @@ class D3D9GpuRenderer {
     document.body.appendChild(c); this.hud = { c, g: c.getContext('2d') };
   }
   drawHud() {
+    const L = globalThis.BlurLocaleCurrent || { t: (key) => ({ hud_avg: 'avg', hud_max: 'max', hud_page_js: 'page JS per frame', hud_intervals: 'intervals above = time between game Presents', hud_draws: 'draws', hud_pipelines: 'pipelines', hud_pending: 'pending', hud_skipped: 'skipped/frame', hud_held: 'held' })[key] || key };
     const h = this.hud, g = h.g, N = Math.min(this.ivn, 180); g.clearRect(0, 0, 420, 150); g.font = '11px ui-monospace,Menlo,monospace';
     let sum = 0, mx = 0; const v = []; for (let i = 0; i < N; i++) { const x = this.ivs[(this.ivn - N + i) % 600]; v.push(x); sum += x; mx = Math.max(mx, x); }
     const avg = sum / (N || 1), s = v.slice().sort((a, b) => a - b), p99 = s[Math.floor(s.length * 0.99)] || 0, y0 = 150, k = 3;
     g.fillStyle = '#2a4'; g.fillRect(0, y0 - 16.67 * k, 420, 1);
     for (let i = 0; i < N; i++) { const x = v[i]; g.fillStyle = x > 20 ? '#e55' : x > 17.5 ? '#ea3' : '#5c8'; g.fillRect(i * 2, y0 - Math.min(x, 48) * k, 2, Math.min(x, 48) * k); }
-    g.fillStyle = '#fff'; g.fillText(`${(1000 / avg).toFixed(1)} fps  avg ${avg.toFixed(1)} ms  p99 ${p99.toFixed(1)}  max ${mx.toFixed(1)}`, 4, 12);
-    if (this.jsh) { let a = 0, m = 0; const n = Math.min(this.jsn, 180); for (let i = 0; i < n; i++) { a += this.jsh[i]; m = Math.max(m, this.jsh[i]); } g.fillText(`page JS per frame: avg ${(a / n).toFixed(1)} ms  max ${m.toFixed(1)} ms   (intervals above = time between game Presents)`, 4, 40); }
-    g.fillText(`WebGPU  draws ${this.stats.frameDraws}  pipelines ${this.stats.pipelines} (pending ${this.pending})  skipped/frame ${this.lastFrameSkip || 0}  held ${this.stats.held || 0}`, 4, 26);
+    g.fillStyle = '#fff'; g.fillText(`${(1000 / avg).toFixed(1)} fps  ${L.t('hud_avg')} ${avg.toFixed(1)} ms  p99 ${p99.toFixed(1)}  ${L.t('hud_max')} ${mx.toFixed(1)}`, 4, 12);
+    if (this.jsh) { let a = 0, m = 0; const n = Math.min(this.jsn, 180); for (let i = 0; i < n; i++) { a += this.jsh[i]; m = Math.max(m, this.jsh[i]); } g.fillText(`${L.t('hud_page_js')}: ${L.t('hud_avg')} ${(a / n).toFixed(1)} ms  ${L.t('hud_max')} ${m.toFixed(1)} ms   (${L.t('hud_intervals')})`, 4, 40); }
+    g.fillText(`WebGPU  ${L.t('hud_draws')} ${this.stats.frameDraws}  ${L.t('hud_pipelines')} ${this.stats.pipelines} (${L.t('hud_pending')} ${this.pending})  ${L.t('hud_skipped')} ${this.lastFrameSkip || 0}  ${L.t('hud_held')} ${this.stats.held || 0}`, 4, 26);
   }
   statLine() { const s = this.stats, fr = this.jsFrames || 0, js = fr ? (this.jsBusy / fr).toFixed(1) : '-', mp = fr ? Math.round(this.jsMsgs / fr) : '-'; this.jsBusy = this.jsFrames = this.jsMsgs = 0;
     return `[WebGPU] JS ${js} ms/frame  msgs/frame ${mp}  draws/frame ${s.frameDraws}  pipelines ${s.pipelines} pending ${this.pending}  skipped/frame ${this.lastFrameSkip || 0}  held ${s.held || 0}  passes ${s.passes}  flushes ${s.flushes}  fb ${s.feedback}`; }
@@ -618,7 +620,7 @@ class D3D9GpuRenderer {
   async loadWarm(url) {
     if (!/gpu-warm/.test(url)) return;       // index.html also passes the WebGL2 warm.json: not ours
     this.warmUntil = performance.now() + 5000; let list = [];
-    try { if (/gpustatic=0/.test(location.hash)) throw new Error('static list disabled by #gpustatic=0'); const res = await fetch(url); if (res.ok) list = await res.json(); } catch (e) { this.log('[gpu] no static warm list: ' + e.message); }
+    try { if (this.hashParams.get('gpustatic') === '0') throw new Error('static list disabled by #gpustatic=0'); const res = await fetch(url); if (res.ok) list = await res.json(); } catch (e) { this.log('[gpu] no static warm list: ' + e.message); }
     let learned = []; try { learned = await this.loadLearned(); } catch (e) { this.log('[gpu] learned warm list unavailable: ' + e); }
     let n = 0, nl = learned.length; const seen = new Set();
     for (const c of list.concat(learned)) { if (!c.vl) continue; const k = this.recipeKey(c); if (seen.has(k)) continue; seen.add(k); const vs = this.recFor(c.vs), ps = this.recFor(c.ps); if (vs && ps) { this.warmLeft++; this.pipelineFor(c, vs, ps, true); n++; } }

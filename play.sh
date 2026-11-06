@@ -13,6 +13,7 @@
 #   --share        also serve the page to other computers on your network (BLUR_BIND=0.0.0.0). Anyone who can reach the
 #                  port controls your game: only on a network you trust.
 #   --name NAME    player name other players see (otherwise asked once, remembered in port/harness/.playername)
+#   --lang CODE    game and browser-wrapper language (en or fr; default BLUR_LANG or en)
 #   --browser APP  macOS: open the page with this application, e.g. "Google Chrome" (default: your default browser)
 #   --no-open      only start the host and print the URL
 #
@@ -23,7 +24,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
-WANT_GPU=1; PORT=8765; OPEN=1; FRAG=""; LAN=0; SHARE=0; NAME=""; BROWSER=""
+WANT_GPU=1; PORT=8765; OPEN=1; FRAG=""; LAN=0; SHARE=0; NAME=""; BROWSER=""; LANG_CODE="${BLUR_LANG:-en}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2;;
@@ -33,12 +34,17 @@ while [ $# -gt 0 ]; do
     --lan) LAN=1; shift;;
     --share) SHARE=1; shift;;
     --name) NAME="$2"; shift 2;;
+    --lang) LANG_CODE="$2"; shift 2;;
     --browser) BROWSER="$2"; shift 2;;
     --no-open) OPEN=0; shift;;
     -h|--help) sed -n '2,/^set -eu/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0;;
     *) die "unknown option $1 (see --help)";;
   esac
 done
+
+case "$LANG_CODE" in en|fr) ;; *) die "unsupported runtime language '$LANG_CODE' (expected en or fr)";; esac
+export BLUR_LANG="$LANG_CODE"
+FRAG="${FRAG:+$FRAG&}lang=$LANG_CODE"
 
 [ -x port/harness/blurrt ] || die "port/harness/blurrt is missing: run ./setup.sh /path/to/your/Blur first"
 GAME_EXE="${BLUR_EXE:-$ROOT/game/extracted/BLUR/Blur.exe}"
