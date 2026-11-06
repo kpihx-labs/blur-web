@@ -10,7 +10,7 @@
 # options
 #   --crt PATH        msvcr90.dll (9.0.21022.8, 32-bit) or Microsoft's vcredist_x86.exe (VC++ 2008) to take it from.
 #                     Needed unless the game folder already contains msvcr90.dll or vcredist_x86.exe.
-#   --jobs N          parallel jobs for lifting and compiling (default: number of CPUs)
+#   --jobs N          parallel jobs for lifting and compiling (default: min(CPUs, 4))
 #   --interp-only     skip the lift/compile stage; the game then runs on the built-in x86 interpreter only.
 #                     Fast to set up, but far too slow to play (see README).
 #   --webgpu          also build the WGSL shader pack so the WebGPU renderer (the default in play.sh) is used instead of the WebGL2 fallback
@@ -66,7 +66,9 @@ case "$OS" in
   Linux)  NCPU="$(nproc)";;
   *) die "unsupported system $OS. On Windows use WSL2 (Ubuntu) and run this script inside it; see README.";;
 esac
-[ -n "$JOBS" ] || JOBS="$NCPU"
+[ -n "$JOBS" ] || { [ "$NCPU" -lt 4 ] && JOBS="$NCPU" || JOBS=4; }
+case "$JOBS" in *[!0-9]*|'') die "--jobs must be a positive integer";; esac
+[ "$JOBS" -gt 0 ] || die "--jobs must be a positive integer"
 # Homebrew is often installed but not on PATH in a fresh shell or an ssh session; pick it up before looking for tools
 if ! have brew; then
   for b in /opt/homebrew/bin/brew /usr/local/bin/brew /home/linuxbrew/.linuxbrew/bin/brew; do
