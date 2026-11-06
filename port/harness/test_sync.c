@@ -208,6 +208,16 @@ static void test_files(const char *dir) {
     strcpy((char *)G + name, "C:\\BLUR\\does_not_exist.bin"); EQ(CALL("CreateFileA", name, 0x80000000u, 1, 0, 3, 0x80, 0), 0xffffffff); EQ(lasterr(), 2);
     EQ(CALL("GetFileAttributesA", name), 0xffffffff);
 }
+static void test_disconnect_input_release(void) {
+    extern uint8_t g_keys[256];
+    cur_test = "disconnect input release";
+    memset(g_keys, 0x80, sizeof g_keys); memset(&g_pad, 0x7f, sizeof g_pad); memset(&g_mouse, 0x7f, sizeof g_mouse);
+    net_release_all_input(); input_pump(&C_);
+    uint8_t zero_keys[sizeof g_keys] = {0}; PadState zero_pad = {0}; MouseState zero_mouse = {0};
+    T_(memcmp(g_keys, zero_keys, sizeof g_keys) == 0);
+    T_(memcmp(&g_pad, &zero_pad, sizeof g_pad) == 0);
+    T_(memcmp(&g_mouse, &zero_mouse, sizeof g_mouse) == 0);
+}
 
 int main(int argc, char **argv) {
     const char *dir = argc > 1 ? argv[1] : "/tmp/blur-sync_test"; mkdir(dir, 0755);
@@ -217,6 +227,6 @@ int main(int argc, char **argv) {
     c->heap_next = HEAP_BASE; c->nhandles = 0; c->nthreads = 5;
     for (int i = 0; i < 5; i++) { Thread *t = &c->threads[i]; t->used = 1; t->tid = 0x1004 + 4 * (uint32_t)i; t->teb = 0x1000000 + (uint32_t)i * 0x2000; wr32(c, t->teb + 0x2c, t->teb + 0x1000); wr32(c, t->teb + 0x24, t->tid); }
     c->tls_next = 0;
-    test_events(); test_semaphores(); test_mutexes(); test_wait_multiple(); test_signal_and_wait(); test_critical_sections(); test_threads(); test_time_and_process(); test_files(dir);
+    test_events(); test_semaphores(); test_mutexes(); test_wait_multiple(); test_signal_and_wait(); test_critical_sections(); test_threads(); test_time_and_process(); test_files(dir); test_disconnect_input_release();
     printf("sync HLE tests: %d checks passed, %d failed\n", npass, nfail); return nfail ? 1 : 0;
 }

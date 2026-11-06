@@ -41,13 +41,16 @@ while [ $# -gt 0 ]; do
 done
 
 [ -x port/harness/blurrt ] || die "port/harness/blurrt is missing: run ./setup.sh /path/to/your/Blur first"
-[ -f game/extracted/BLUR/Blur.exe ] || die "game/extracted/BLUR/Blur.exe is missing: run ./setup.sh /path/to/your/Blur first"
+GAME_EXE="${BLUR_EXE:-$ROOT/game/extracted/BLUR/Blur.exe}"
+[ -f "$GAME_EXE" ] || die "Blur.exe is missing at $GAME_EXE: run setup or set BLUR_EXE to the verified generated native copy"
+export BLUR_EXE="$GAME_EXE"
 [ "$(cat .setup/mode 2>/dev/null || true)" = interp ] && echo "note: this build runs the game on the x86 interpreter only (setup --interp-only); expect a slideshow"
 
 if [ "$WANT_GPU" = 1 ]; then
   FRAG="${FRAG:+$FRAG&}gpu=1"
   [ -f port/harness/web/blur.wgslpack.gz ] || echo "note: WebGPU is the default, but the WGSL shader pack is not built yet, so the page will use WebGL2. Build it once: tools/build_wgsl_pack.sh"
 fi
+[ "${BLUR_PERF_BROWSER:-0}" = 0 ] || FRAG="${FRAG:+$FRAG&}telemetry=1"
 # A port is busy if the host could not bind it (same call the host makes). Connecting is not enough: on macOS, system services
 # (e.g. sharingd) can hold a port on IPv6 only, which refuses a connect to 127.0.0.1 but still makes the bind fail.
 PYBIN=python3; [ -x .venv/bin/python ] && PYBIN=.venv/bin/python

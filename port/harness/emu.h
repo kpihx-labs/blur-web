@@ -60,7 +60,7 @@ typedef struct { uint32_t type; int32_t a, b, c, d; } NetInput;
 typedef struct { int active; uint16_t btn; uint8_t lt, rt; int16_t lx, ly, rx, ry; } PadState;      // browser Gamepad -> XInput (input type 6)
 typedef struct { int32_t dx, dy, dz; uint8_t btn[8]; } MouseState;                                  // DirectInput mouse (input types 4, 5, 7)
 extern PadState g_pad; extern MouseState g_mouse;
-int net_start(int port); void net_send(const void *data, size_t n); int net_client_connected(void); int net_poll_input(NetInput *out);
+int net_start(int port); void net_send(const void *data, size_t n); int net_client_connected(void); int net_poll_input(NetInput *out); void net_release_all_input(void);
 enum { G_TEX_CREATE = 20, G_TEX_UPLOAD = 21, G_SURF_CREATE = 22, G_BUF_CREATE = 30, G_BUF_UPLOAD = 31, G_SHADER = 40, G_VDECL = 41, G_SHADER_REF = 42,
        G_SET_RS = 50, G_SET_SS = 51, G_SET_TEX = 52, G_SET_VS = 53, G_SET_PS = 54, G_SET_VDECL = 55, G_SET_FVF = 56, G_SET_STREAM = 57, G_SET_INDICES = 58,
        G_SET_VSC = 59, G_SET_PSC = 60, G_SET_VIEWPORT = 61, G_SET_SCISSOR = 62, G_SET_RT = 63, G_SET_DS = 64, G_DRAW = 70, G_DRAW_UP = 71, G_CLEAR = 72,
@@ -73,6 +73,7 @@ extern volatile uint32_t g_net_epoch;   // incremented each time a viewer attach
 #define GFXW(type, ...) do { if (gfx_on()) { uint32_t _w[] = {__VA_ARGS__}; gfx_msg(type, _w, (int)(sizeof _w / 4), NULL, 0); } } while (0)
 void md5_digest(const uint8_t *m, size_t n, uint8_t out[16]); void sha1_digest(const uint8_t *m, size_t n, uint8_t out[20]); void sha256_digest(const uint8_t *m, size_t n, uint8_t out[32]);
 typedef struct Ctx Ctx;
+void input_pump(Ctx *c);
 typedef uint32_t (*hle_fn)(Ctx *c, uint32_t *a);
 
 typedef struct {

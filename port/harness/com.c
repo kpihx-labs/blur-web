@@ -46,6 +46,14 @@ void input_pump(Ctx *c) {                  // drain browser input into g_keys; B
         else if (e.type == 7) { g_mouse.dx += e.a; g_mouse.dy += e.b; }                                    // pointer-lock mouse deltas
         else if (e.type == 4) { if (e.a >= 0 && e.a < 8) g_mouse.btn[e.a] = e.b ? 0x80 : 0; }
         else if (e.type == 5) g_mouse.dz += e.a;
+        else if (e.type == 12) {
+            fprintf(stderr, "[browser-perf] received-Present interval avg=%.3fms p99=%.3fms", e.a / 1000.0, e.b / 1000.0);
+            if (e.c < 0) fprintf(stderr, " gpu=n/a"); else fprintf(stderr, " WebGL-GPU-time=%.3fms", e.c / 1000.0);
+            if (e.d < 0) fprintf(stderr, " js_heap=n/a\n"); else fprintf(stderr, " js_heap=%dMiB\n", e.d);
+        }
+        else if (e.type == 13) fprintf(stderr, "[browser-perf] browser-observed-input-change to receipt-of-next-Present-batch approximation %.3fms (includes transport/scheduling; not display-photon latency)\n", e.a / 1000.0);
+        else if (e.type == 14) fprintf(stderr, "[browser-perf] renderer=%s; GPU timer availability is reported per sample\n", e.a == 1 ? "WebGPU" : e.a == 2 ? "WebGL2" : "unknown");
+        else if (e.type == 15) { memset(g_keys, 0, sizeof g_keys); memset(&g_pad, 0, sizeof g_pad); memset(&g_mouse, 0, sizeof g_mouse); }
         if (e.type == 1 || e.type == 2) for (size_t i = 0; i < sizeof vkmap / sizeof vkmap[0]; i++) if (vkmap[i].vk == e.a) g_keys[vkmap[i].dik & 0xff] = e.type == 1 ? 0x80 : 0; }
     { static int init, n; static struct { uint8_t dik; double at; char trig[40]; long delay; double dsec; int secs; double hold; } ev[256]; static double t0;     // BLUR_KEYS="Enter@30,Down@35": scripted key taps (seconds after the first poll)
       if (!init) { init = 1; const char *k = getenv("BLUR_KEYS"); t0 = (double)real_us() / 1e6;

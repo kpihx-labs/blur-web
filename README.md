@@ -109,6 +109,15 @@ Enter confirms and skips cut-scenes, Esc opens the pause menu. A browser-connect
 API. In the page: **F11** or the Fullscreen button, **F2** shows the HUD. On a Mac the key labelled delete works as
 Delete. Keys are released when the tab loses focus.
 
+When `BLUR_INPUT_CONFIG` names a validated schema-1 profile, the page applies
+its keyboard/gamepad mappings and configurable UI hotkeys. Gamepad selectors
+are `*`, an exact Gamepad API `id`, or `index:N`. An absent variable preserves
+the standalone defaults above; a configured file that is unreadable, unsafe, or
+invalid disables gameplay input visibly instead of silently using other maps.
+The harness opens that file without following a final symlink/reparse point,
+checks the opened handle is a regular file, and enforces the launcher's 1 MiB
+input-configuration limit.
+
 ## LAN multiplayer
 
 `./play.sh --lan` runs without any server: each machine broadcasts a HELLO on UDP **47801**, learns the other players

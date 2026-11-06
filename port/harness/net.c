@@ -7,6 +7,9 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
+#include <fcntl.h>
+#include <io.h>
 #include <sys/stat.h>
 // sockets are SOCKET handles (small integers in practice) carried in an int like the POSIX fds below
 #define read(fd, b, n) recv((SOCKET)(fd), (char *)(b), (int)(n), 0)
@@ -23,6 +26,7 @@ static char *strcasestr(const char *h, const char *n) { size_t l = strlen(n); fo
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <netinet/tcp.h>
@@ -66,13 +70,25 @@ static uint8_t *outbuf; static size_t outlen, outcap; static int client_fd = -1;
 #define OUT_LIMIT (256u << 20)
 
 
-int net_client_connected(void) { return client_fd >= 0; }
+int net_client_connected(void) {
+    pthread_mutex_lock(&qm);
+    int connected = client_fd >= 0;
+    pthread_mutex_unlock(&qm);
+    return connected;
+}
 void net_send(const void *data, size_t n) {
     if (!server_up) return;
     pthread_mutex_lock(&qm);
     if (client_fd < 0) { pthread_mutex_unlock(&qm); return; }                       // nobody listening: drop
-    while (outlen + n > OUT_LIMIT && client_fd >= 0) pthread_cond_wait(&qspace, &qm);   // back-pressure on a slow browser
-    if (outlen + n > outcap) { outcap = (outlen + n) * 2; outbuf = realloc(outbuf, outcap); }
+    if (n > OUT_LIMIT) { fprintf(stderr, "[net] refusing oversized %llu-byte output message\n", (unsigned long long)n); pthread_mutex_unlock(&qm); return; }
+    while (outlen > OUT_LIMIT - n && client_fd >= 0) pthread_cond_wait(&qspace, &qm);   // back-pressure on a slow browser
+    if (client_fd < 0) { pthread_mutex_unlock(&qm); return; }
+    if (outlen + n > outcap) {
+        size_t required = outlen + n, capacity = required > OUT_LIMIT / 2 ? OUT_LIMIT : required * 2;
+        uint8_t *grown = realloc(outbuf, capacity);
+        if (!grown) { fprintf(stderr, "[net] could not grow output queue to %llu bytes\n", (unsigned long long)capacity); pthread_mutex_unlock(&qm); return; }
+        outbuf = grown; outcap = capacity;
+    }
     memcpy(outbuf + outlen, data, n); outlen += n;
     pthread_cond_signal(&qc); pthread_mutex_unlock(&qm);
 }
@@ -85,7 +101,8 @@ int net_poll_input(NetInput *out) {
     int r = 0; pthread_mutex_lock(&im); if (inh != int_) { *out = inq[inh]; inh = (inh + 1) % INQ; r = 1; } pthread_mutex_unlock(&im); return r;
 }
 volatile uint32_t g_net_ack = 0; volatile int g_net_ack_seen = 0;      // viewer flow control: type-9 messages carry the number of frames the page has presented
-static void push_input(NetInput *e) { if (e->type == 9) { g_net_ack = (uint32_t)e->a; g_net_ack_seen = 1; return; } pthread_mutex_lock(&im); if ((int_ + 1) % INQ != inh) { inq[int_] = *e; int_ = (int_ + 1) % INQ; } pthread_mutex_unlock(&im); }
+static void push_input(NetInput *e) { if (e->type == 9) { g_net_ack = (uint32_t)e->a; g_net_ack_seen = 1; return; } pthread_mutex_lock(&im); if (e->type == 15 && (int_ + 1) % INQ == inh) inh = int_ = 0; if ((int_ + 1) % INQ != inh) { inq[int_] = *e; int_ = (int_ + 1) % INQ; } pthread_mutex_unlock(&im); }
+void net_release_all_input(void) { NetInput released = {0}; released.type = 15; push_input(&released); }
 
 // ---- sockets ---------------------------------------------------------------------------------------------------------------------------------
 static int write_all(int fd, const void *p, size_t n) { const uint8_t *b = p; while (n) { ssize_t w = write(fd, b, n); if (w <= 0) return -1; b += w; n -= (size_t)w; } return 0; }
@@ -98,6 +115,13 @@ static int writev_all(int fd, struct iovec *iov, int cnt) {          // header +
     return 0;
 }
 static int read_all(int fd, void *p, size_t n) { uint8_t *b = p; while (n) { ssize_t r = read(fd, b, n); if (r <= 0) return -1; b += r; n -= (size_t)r; } return 0; }
+static void socket_shutdown(int fd) {
+#ifdef _WIN32
+    shutdown((SOCKET)fd, SD_BOTH);
+#else
+    shutdown(fd, SHUT_RDWR);
+#endif
+}
 
 static void *writer_thread(void *arg) {
     int fd = (int)(intptr_t)arg;
@@ -111,19 +135,68 @@ static void *writer_thread(void *arg) {
         if (n < 126) hdr[hl++] = (uint8_t)n; else if (n < 65536) { hdr[hl++] = 126; hdr[hl++] = n >> 8; hdr[hl++] = (uint8_t)n; }
         else { hdr[hl++] = 127; for (int i = 7; i >= 0; i--) hdr[hl++] = (uint8_t)((uint64_t)n >> (8 * i)); }
         struct iovec iov[2] = {{hdr, (size_t)hl}, {chunk, n}}; int bad = writev_all(fd, iov, 2); free(chunk);
-        if (bad) { pthread_mutex_lock(&qm); if (client_fd == fd) client_fd = -1; pthread_cond_broadcast(&qspace); pthread_mutex_unlock(&qm); close(fd); return NULL; }
+        if (bad) {
+            pthread_mutex_lock(&qm);
+            if (client_fd == fd) client_fd = -2;   // reserve the slot until conn_thread has joined us and closed fd
+            pthread_cond_broadcast(&qspace); pthread_cond_broadcast(&qc); pthread_mutex_unlock(&qm);
+            socket_shutdown(fd);                   // interrupt the reader; conn_thread remains the sole close owner
+            return NULL;
+        }
     }
 }
+static void http_empty(int fd, int status, const char *reason) {
+    char response[160]; int n = snprintf(response, sizeof response, "HTTP/1.1 %d %s\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", status, reason);
+    if (n > 0 && n < (int)sizeof response) write_all(fd, response, (size_t)n);
+}
+static FILE *open_regular_nofollow(const char *path, uint64_t *size) {
+#ifdef _WIN32
+    HANDLE handle = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (handle == INVALID_HANDLE_VALUE) return NULL;
+    BY_HANDLE_FILE_INFORMATION info;
+    if (GetFileType(handle) != FILE_TYPE_DISK || !GetFileInformationByHandle(handle, &info) ||
+        (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
+        CloseHandle(handle); return NULL;
+    }
+    *size = ((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow;
+    int raw = _open_osfhandle((intptr_t)handle, _O_RDONLY | _O_BINARY);
+    if (raw < 0) { CloseHandle(handle); return NULL; }
+    FILE *file = _fdopen(raw, "rb");
+    if (!file) { _close(raw); return NULL; }
+    return file;
+#else
+    int raw = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (raw < 0) return NULL;
+    struct stat st;
+    if (fstat(raw, &st) || !S_ISREG(st.st_mode) || st.st_size < 0) { close(raw); return NULL; }
+    *size = (uint64_t)st.st_size;
+    FILE *file = fdopen(raw, "rb");
+    if (!file) { close(raw); return NULL; }
+    return file;
+#endif
+}
 static void serve_file(int fd, const char *path) {
-    char fn[256]; snprintf(fn, sizeof fn, "web%s", strcmp(path, "/") ? path : "/index.html");
-    if (strstr(fn, "..")) { write_all(fd, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n", 45); return; }
-    FILE *f = fopen(fn, "rb");
-    if (!f) { write_all(fd, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n", 45); return; }
-    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET); char *b = malloc(n);
-    if (fread(b, 1, n, f) != (size_t)n) n = 0; fclose(f);
-    const char *ct = strstr(fn, ".js") ? "text/javascript" : strstr(fn, ".html") ? "text/html" : "application/octet-stream";
-    char h[256]; int hl = snprintf(h, sizeof h, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %ld\r\nCache-Control: no-store\r\n\r\n", ct, n);
-    write_all(fd, h, hl); write_all(fd, b, n); free(b);
+    char fn[1024];
+    int configured_input = !strcmp(path, "/input-config.json");
+    if (configured_input) {
+        const char *config = getenv("BLUR_INPUT_CONFIG");
+        if (!config || !*config) { http_empty(fd, 404, "Not Found"); return; }
+        if (snprintf(fn, sizeof fn, "%s", config) >= (int)sizeof fn) { http_empty(fd, 500, "Configured Path Too Long"); return; }
+    } else if (snprintf(fn, sizeof fn, "web%s", strcmp(path, "/") ? path : "/index.html") >= (int)sizeof fn) { http_empty(fd, 414, "URI Too Long"); return; }
+    if (strstr(fn, "..")) { http_empty(fd, 404, "Not Found"); return; }
+    uint64_t n64 = 0, limit = configured_input ? (1u << 20) : (64u << 20);
+    FILE *f = open_regular_nofollow(fn, &n64);
+    if (!f) { http_empty(fd, configured_input ? 500 : 404, configured_input ? "Input Configuration Unreadable" : "Not Found"); return; }
+    if (n64 > limit || n64 > SIZE_MAX) { fclose(f); http_empty(fd, 500, "File Too Large"); return; }
+    size_t n = (size_t)n64;
+    char *b = malloc(n ? n : 1);
+    if (!b) { fclose(f); http_empty(fd, 500, "Out Of Memory"); return; }
+    if (n && fread(b, 1, n, f) != n) { free(b); fclose(f); http_empty(fd, 500, "File Read Failed"); return; }
+    fclose(f);
+    const char *ct = strstr(fn, ".js") ? "text/javascript" : strstr(fn, ".html") ? "text/html" : strstr(fn, ".json") ? "application/json" : "application/octet-stream";
+    char h[256]; int hl = snprintf(h, sizeof h, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %llu\r\nCache-Control: no-store\r\n\r\n", ct, (unsigned long long)n);
+    if (hl > 0 && hl < (int)sizeof h) { write_all(fd, h, (size_t)hl); write_all(fd, b, n); }
+    free(b);
 }
 static void *conn_thread(void *arg) {
     int fd = (int)(intptr_t)arg; char req[4096]; int n = 0;
@@ -136,29 +209,43 @@ static void *conn_thread(void *arg) {
     uint8_t dig[20]; sha1((uint8_t *)cat, strlen(cat), dig); char acc[40]; b64(dig, 20, acc);
     char resp[256]; int rl = snprintf(resp, sizeof resp, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", acc);
     write_all(fd, resp, rl);
-    { int one = getenv("BLUR_NODELAY") ? atoi(getenv("BLUR_NODELAY")) : 1, sb = 4 << 20; if (one) { setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one); setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sb, sizeof sb); } }      // BLUR_NODELAY=0: old behaviour (A/B)     // no Nagle: the tail segment of a frame must not wait for the ACK of the previous ones
+    { int one = getenv("BLUR_NODELAY") ? atoi(getenv("BLUR_NODELAY")) : 1, sb = 4 << 20; if (one) { setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one); setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (const char *)&sb, sizeof sb); } }      // BLUR_NODELAY=0: old behaviour (A/B)     // no Nagle: the tail segment of a frame must not wait for the ACK of the previous ones
     pthread_mutex_lock(&qm);
-    if (client_fd >= 0) { pthread_mutex_unlock(&qm); static const uint8_t busy[4] = {0x88, 0x02, 0x03, 0xf5}; write_all(fd, (const char *)busy, 4); close(fd); return NULL; }   // first viewer wins: refuse with close code 1013 ("try again later")
+    if (client_fd != -1) { pthread_mutex_unlock(&qm); static const uint8_t busy[4] = {0x88, 0x02, 0x03, 0xf5}; write_all(fd, (const char *)busy, 4); close(fd); return NULL; }   // first viewer wins: refuse with close code 1013 ("try again later")
     hc_viewer_reset(); client_fd = fd; g_net_epoch++; free(outbuf); outbuf = NULL; outlen = outcap = 0; pthread_mutex_unlock(&qm);
     fprintf(stderr, "[net] browser connected\n");
-    pthread_t wt; pthread_create(&wt, NULL, writer_thread, (void *)(intptr_t)fd); pthread_detach(wt);
-    for (;;) {                                                                     // read masked client frames: input events
+    pthread_t wt; int writer_started = pthread_create(&wt, NULL, writer_thread, (void *)(intptr_t)fd) == 0;
+    if (!writer_started) fprintf(stderr, "[net] could not start browser writer thread\n");
+    while (writer_started) {                                                       // read masked client frames: input events
         uint8_t h[2]; if (read_all(fd, h, 2)) break;
         uint64_t len = h[1] & 0x7f; if (len == 126) { uint8_t e[2]; if (read_all(fd, e, 2)) break; len = e[0] << 8 | e[1]; }
         else if (len == 127) { uint8_t e[8]; if (read_all(fd, e, 8)) break; len = 0; for (int i = 0; i < 8; i++) len = len << 8 | e[i]; }
-        uint8_t mask[4] = {0}; if ((h[1] & 0x80) && read_all(fd, mask, 4)) break;
-        if (len > (1u << 20)) break; uint8_t *pl = malloc(len + 1); if (read_all(fd, pl, len)) { free(pl); break; }
+        if (!(h[1] & 0x80) || !(h[0] & 0x80)) break;
+        uint8_t mask[4]; if (read_all(fd, mask, 4)) break;
+        if (len > (1u << 20)) break;
+        uint8_t *pl = malloc((size_t)len + 1); if (!pl || read_all(fd, pl, (size_t)len)) { free(pl); break; }
         for (uint64_t i = 0; i < len; i++) pl[i] ^= mask[i & 3];
-        if ((h[0] & 0xf) == 2 && len >= 12 && (((uint32_t *)pl)[0] == 0x48430Au || ((uint32_t *)pl)[0] == 0x48430Cu)) hc_net_msg(pl, len);      // page cache announce (0x48430A) / stored-ack (0x48430C): variable length, not a NetInput
-        else if ((h[0] & 0xf) == 2 && len >= sizeof(NetInput)) { NetInput e; memcpy(&e, pl, sizeof e); push_input(&e); }
+        uint32_t magic = 0; if (len >= sizeof magic) memcpy(&magic, pl, sizeof magic);
+        if ((h[0] & 0xf) == 2 && len >= 12 && (magic == 0x48430Au || magic == 0x48430Cu)) hc_net_msg(pl, len);      // page cache announce (0x48430A) / stored-ack (0x48430C): variable length, not a NetInput
+        else if ((h[0] & 0xf) == 2 && len == sizeof(NetInput)) { NetInput e; memcpy(&e, pl, sizeof e); push_input(&e); }
         free(pl); if ((h[0] & 0xf) == 8) break;
     }
-    pthread_mutex_lock(&qm); if (client_fd == fd) client_fd = -1; pthread_cond_broadcast(&qspace); pthread_cond_broadcast(&qc); pthread_mutex_unlock(&qm);
-    fprintf(stderr, "[net] browser disconnected\n"); close(fd); return NULL;
+    net_release_all_input();       // an abrupt tab/network loss must not leave host keys, mouse buttons or XInput held
+    pthread_mutex_lock(&qm);
+    if (client_fd == fd) client_fd = -2;
+    pthread_cond_broadcast(&qspace); pthread_cond_broadcast(&qc); pthread_mutex_unlock(&qm);
+    socket_shutdown(fd);                       // unblock a writer in send/WSASend before joining it
+    if (writer_started) pthread_join(wt, NULL);
+    close(fd);                                  // conn_thread is the sole owner that closes WebSocket fds
+    pthread_mutex_lock(&qm);
+    if (client_fd == -2) client_fd = -1;
+    pthread_cond_broadcast(&qspace); pthread_cond_broadcast(&qc); pthread_mutex_unlock(&qm);
+    fprintf(stderr, "[net] browser disconnected\n"); return NULL;
 }
 static void *accept_thread(void *arg) {
     int ls = (int)(intptr_t)arg;
-    for (;;) { int fd = accept(ls, NULL, NULL); if (fd < 0) continue; pthread_t t; pthread_create(&t, NULL, conn_thread, (void *)(intptr_t)fd); pthread_detach(t); }
+    for (;;) { int fd = accept(ls, NULL, NULL); if (fd < 0) continue; pthread_t t; if (pthread_create(&t, NULL, conn_thread, (void *)(intptr_t)fd)) { close(fd); continue; } pthread_detach(t); }
+    return NULL;
 }
 int net_start(int port) {
 #ifdef _WIN32
@@ -168,16 +255,20 @@ int net_start(int port) {
 #endif
     // a viewer that vanishes mid-write (killed browser, dead tab) must not kill the game with SIGPIPE
 
-    int ls = socket(AF_INET, SOCK_STREAM, 0); int one = 1;
+    int ls = socket(AF_INET, SOCK_STREAM, 0);
+    if (ls < 0) { perror("net socket"); return -1; }
 #ifndef _WIN32
+    int one = 1;
     setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);      // (on Windows SO_REUSEADDR would allow port hijacking: leave it off)
 #endif
    
     // BLUR_BIND=0.0.0.0 (or a specific interface address) serves other machines on the LAN; the default stays loopback only. Anyone who can reach the port controls the game.
     const char *bind_ip = getenv("BLUR_BIND"); struct in_addr ba; ba.s_addr = htonl(INADDR_LOOPBACK); if (bind_ip && *bind_ip && inet_pton(AF_INET, bind_ip, &ba) != 1) { fprintf(stderr, "[net] BLUR_BIND=%s is not an IPv4 address, using 127.0.0.1\n", bind_ip); ba.s_addr = htonl(INADDR_LOOPBACK); }
     struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); a.sin_addr = ba;
-    if (bind(ls, (struct sockaddr *)&a, sizeof a) || listen(ls, 4)) { perror("net bind"); return -1; }
-    server_up = 1; pthread_t t; pthread_create(&t, NULL, accept_thread, (void *)(intptr_t)ls); pthread_detach(t);
+    if (bind(ls, (struct sockaddr *)&a, sizeof a) || listen(ls, 4)) { perror("net bind"); close(ls); return -1; }
+    pthread_t t;
+    if (pthread_create(&t, NULL, accept_thread, (void *)(intptr_t)ls)) { close(ls); fprintf(stderr, "[net] could not start accept thread\n"); return -1; }
+    server_up = 1; pthread_detach(t);
     if (ba.s_addr == htonl(INADDR_LOOPBACK)) fprintf(stderr, "[net] open http://127.0.0.1:%d/ in a browser\n", port);
     else { char ip[64]; inet_ntop(AF_INET, &ba, ip, sizeof ip); fprintf(stderr, "[net] listening on %s:%d (LAN): open http://<this-machine-ip>:%d/ in a browser (secure-context features need localhost or https, see PLAN_120FPS.md F156)\n", ip, port, port); }
     return 0;

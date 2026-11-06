@@ -56,8 +56,10 @@ static void out_flush(void) {
     if (wav && wav_frames < wav_max) { uint32_t n = (uint32_t)nacc; if (wav_frames + n > wav_max) n = wav_max - wav_frames; fwrite(acc, 4, n, wav); wav_frames += n; wav_hdr(); fflush(wav); }
     if (net_client_connected()) {
         uint32_t hdr[5] = {12 + (uint32_t)nacc * 4, G_AUDIO, AM_RATE, 2, (uint32_t)nacc};
-        uint8_t *m = malloc(sizeof hdr + (size_t)nacc * 4); memcpy(m, hdr, sizeof hdr); memcpy(m + sizeof hdr, acc, (size_t)nacc * 4);
-        net_send(m, sizeof hdr + (size_t)nacc * 4); free(m); st_sent_frames += (uint64_t)nacc;
+        size_t bytes = sizeof hdr + (size_t)nacc * 4;
+        uint8_t *m = malloc(bytes);
+        if (m) { memcpy(m, hdr, sizeof hdr); memcpy(m + sizeof hdr, acc, (size_t)nacc * 4); net_send(m, bytes); free(m); st_sent_frames += (uint64_t)nacc; }
+        else fprintf(stderr, "[audio] could not allocate %llu-byte browser audio message\n", (unsigned long long)bytes);
     }
     nacc = 0;
 }
@@ -138,9 +140,14 @@ void audio_tick(Ctx *c) {
 static struct { int used; AmVoice v; int16_t *ring; uint32_t frames; } streams[MAXSTREAM];
 int audio_stream_open(uint32_t rate, int channels, uint32_t ring_frames) {
     ds_init_once();
+    if (!rate || channels <= 0 || channels > 8) return -1;
     for (int i = 0; i < MAXSTREAM; i++) if (!streams[i].used) {
-        memset(&streams[i], 0, sizeof streams[i]); streams[i].used = 1; streams[i].frames = ring_frames ? ring_frames : rate;      // default: 1 s ring
-        streams[i].ring = calloc(streams[i].frames * (uint32_t)channels, 2);
+        uint32_t capacity = ring_frames ? ring_frames : rate;      // default: 1 s ring
+        uint64_t samples = (uint64_t)capacity * (uint32_t)channels;
+        if (!capacity || samples > SIZE_MAX / sizeof(int16_t) || samples * sizeof(int16_t) > UINT32_MAX) return -1;
+        int16_t *ring = calloc((size_t)samples, sizeof *ring);
+        if (!ring) return -1;
+        memset(&streams[i], 0, sizeof streams[i]); streams[i].used = 1; streams[i].frames = capacity; streams[i].ring = ring;
         AmVoice *v = &streams[i].v; v->data = (const uint8_t *)streams[i].ring; v->channels = (uint16_t)channels; v->bits = 16; v->rate = rate; v->size = streams[i].frames * (uint32_t)channels * 2;
         v->stream = 1; v->playing = 1; am_add(&mixer, v);
         if (!out_started) { out_started = 1; t_last = audio_clock_us(); st_last_log = t_last; }
@@ -167,22 +174,25 @@ void audio_stream_close(int id) { if (id < 0 || id >= MAXSTREAM || !streams[id].
 #include <unistd.h>
 static void *testmovie_thread(void *arg) {
     char cmd[1024]; snprintf(cmd, sizeof cmd, "ffmpeg -v quiet -i '%s' -map 0:a:%d -f s16le -ar 48000 -ac 2 -", (char *)arg, getenv("BLUR_AUDIO_TESTMOVIE_TRACK") ? atoi(getenv("BLUR_AUDIO_TESTMOVIE_TRACK")) : 0);
-    FILE *p = popen(cmd, "r"); if (!p) return NULL; int id = audio_stream_open(48000, 2, 48000);
+    FILE *p = popen(cmd, "r"); if (!p) { free(arg); return NULL; } int id = audio_stream_open(48000, 2, 48000);
     fprintf(stderr, "[ds] test movie audio stream %d from %s\n", id, (char *)arg);
+    if (id < 0) { pclose(p); free(arg); return NULL; }
     int16_t buf[2 * 1024]; size_t n;
     while ((n = fread(buf, 4, 1024, p)) > 0) { size_t off = 0; while (off < n) { uint32_t k = audio_stream_push(id, buf + 2 * off, (uint32_t)(n - off)); off += k; if (!k) usleep(5000); } }
     while (audio_stream_queued(id)) usleep(10000);
-    pclose(p); audio_stream_close(id); return NULL;
+    pclose(p); audio_stream_close(id); free(arg); return NULL;
 }
 void audio_start_testmovie(void) {
     const char *m = getenv("BLUR_AUDIO_TESTMOVIE"); static int done; if (!m || done) return; done = 1;
-    pthread_t t; pthread_create(&t, NULL, testmovie_thread, strdup(m)); pthread_detach(t);
+    char *copy = strdup(m); pthread_t t;
+    if (!copy || pthread_create(&t, NULL, testmovie_thread, copy)) { free(copy); fprintf(stderr, "[ds] could not start test movie audio thread\n"); return; }
+    pthread_detach(t);
 }
 
 // ---- COM helpers -------------------------------------------------------------------------------------------------------------
 static Buf *B(Ctx *c, uint32_t p) { uint32_t i = rd32(c, p + 8); return i && i < (uint32_t)nbufs && bufs[i].used ? &bufs[i] : NULL; }
 static const uint8_t IID_Notify[4] = {0x83, 0x07, 0x21, 0xb0}, IID_3DBuf[4] = {0x86, 0xfa, 0x9a, 0x27}, IID_3DList[4] = {0x84, 0xfa, 0x9a, 0x27};
-static const uint8_t IID_Buf[4] = {0x85, 0xfa, 0x9a, 0x27}, IID_Buf8[4] = {0x49, 0xa4, 0x25, 0x68}, IID_DS8[4] = {0x93, 0x7e, 0x0a, 0xc5}, IID_Unk[4] = {0, 0, 0, 0};
+static const uint8_t IID_Buf[4] = {0x85, 0xfa, 0x9a, 0x27}, IID_Buf8[4] = {0x49, 0xa4, 0x25, 0x68}, IID_Unk[4] = {0, 0, 0, 0};
 static uint32_t buf_make(Ctx *c, int idx);
 static uint32_t notify_make(Ctx *c, int idx), d3buf_make(Ctx *c, int idx), listener_make(Ctx *c);
 

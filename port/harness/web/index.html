@@ -27,6 +27,7 @@
   <div id="stage"><canvas id="c" width="1280" height="720" tabindex="0"></canvas></div>
   <div id="log"></div>
 </div>
+<script src="input.js"></script>
 <script src="renderer.js"></script>
 <script src="hcache.js"></script>
 <script>(async () => {
@@ -55,16 +56,34 @@
     return new D3D9Renderer(canvas, log);
   }
   const r = await makeRenderer(); window.__r = r; r.sendInput = (t, a, b, c, d) => send(t, a, b, c, d);
+  let inputConfig = null, inputBlocked = false;
+  try {
+    const response = await fetch('/input-config.json', { cache: 'no-store' });
+    if (response.status === 404) {
+      // Standalone blur-web keeps its historical transparent input and UI keys.
+      inputConfig = { schema: 1, players: [{ player: 0, devices: [] }], hotkeys: [{ key: 'F11', action: 'fullscreen' }, { key: 'F2', action: 'hud' }] };
+    } else {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      inputConfig = await response.json();
+      BlurInput.validateInputConfig(inputConfig);
+    }
+  } catch (e) {
+    inputBlocked = true;
+    log('[input] configured profile could not be loaded: ' + e.message + '; all gameplay input is disabled instead of silently ignoring mappings');
+    inputConfig = { schema: 1, players: [{ player: 0, devices: [] }], hotkeys: [] };
+  }
+  const seat = inputConfig.players.find((p) => p.player === 0) || { devices: [] }, devices = seat.devices || [], hotkeys = new Map((inputConfig.hotkeys || []).map((h) => [h.key, h.action]));
+  const keyboardDevices = devices.filter((d) => d.enabled && d.kind === 'keyboard'), gamepadDevices = devices.filter((d) => d.enabled && d.kind === 'gamepad');
   const hc = r.hc = new HCache(r); window.__hc = hc; window.__wire = { bytes: 0, msgs: 0 };
   let ws, frames = 0, last = performance.now(), msgs = 0, bytes = 0, presented = 0;
   function connect() {
     ws = new WebSocket(`ws://${location.host}/ws`); ws.binaryType = 'arraybuffer'; window.__ws = ws;
-    ws.onopen = () => { statusEl.textContent = 'connected'; statusEl.className = 'ok'; hc.ready.then(() => { if (ws.readyState === 1) hc.announce(ws); }); };
+    ws.onopen = () => { statusEl.textContent = inputBlocked ? 'connected; configured input disabled (see log)' : 'connected'; statusEl.className = inputBlocked ? 'bad' : 'ok'; hc.ready.then(() => { if (ws.readyState === 1) hc.announce(ws); }); };
     ws.onclose = (e) => { audioFadeOut(); au.faded = true; const busy = e.code === 1013; statusEl.textContent = busy ? 'another viewer is connected - retrying every 3 s' : 'disconnected - retrying'; statusEl.className = 'bad'; setTimeout(connect, busy ? 3000 : 1000); };
     ws.onmessage = (e) => {
       bytes += e.data.byteLength; window.__wire.bytes += e.data.byteLength; window.__wire.msgs++;
       hc.onData(e.data, (n) => { msgs += n.messages; frames += n.presents;
-        if (n.presents) { presented += n.presents; send(9, presented); } });       // flow control: the harness runs at most BLUR_MAXLAG (4) frames ahead of this counter; no ack = no throttling
+        if (n.presents) { presented += n.presents; send(9, presented); if (lastObservedInputAt) { send(13, Math.round((performance.now() - lastObservedInputAt) * 1000)); lastObservedInputAt = 0; } } });       // flow control: the harness runs at most BLUR_MAXLAG (4) frames ahead of this counter; no ack = no throttling
     };
   }
   // ---- audio: host-mixed 48 kHz stereo PCM (message type 90) -> AudioWorklet. Browsers need a user gesture before audio can start.
@@ -117,8 +136,14 @@
     document.getElementById('fps').textContent = `${(frames / dt).toFixed(1)} fps`; document.getElementById('stats').textContent = `${(bytes / dt / 1048576).toFixed(1)} MB/s  ${r.statLine()}  ${audioStat()}`; frames = 0; bytes = 0; msgs = 0; }, 1000);
   // input -> harness (NetInput: 5 x int32: type,a,b,c,d). 1=key down(vk) 2=key up(vk) 3=mouse move(x,y) 4=mouse button(btn,down) 5=wheel
   const send = (t, a = 0, b = 0, c = 0, d = 0) => { if (ws && ws.readyState === 1) ws.send(new Int32Array([t, a, b, c, d]).buffer); };
+  let lastObservedInputAt = 0;
+  if (location.hash.includes('telemetry=1')) {
+    setTimeout(() => send(14, r.constructor.name.includes('Gpu') ? 1 : 2), 1000);
+    setInterval(() => { const p = r.perf ? r.perf(120) : {}; if (!p.frames) return; const heap = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : -1; send(12, Math.round(p.avg * 1000), Math.round(p.p99 * 1000), p.gpuMs > 0 ? Math.round(p.gpuMs * 1000) : -1, heap); }, 2000);
+  }
   // Mac keyboards have no Right Ctrl: = / ] / PageUp send Right Ctrl (LAN: Host Game) and - / [ / PageDown send Right Shift (LAN: Refresh)
   const vk = (e) => ({ArrowLeft:37,ArrowUp:38,ArrowRight:39,ArrowDown:40,Enter:13,Escape:27,Space:32,Tab:9,Backspace:8,Delete:46,ShiftLeft:160,ShiftRight:161,F1:112,F2:113,F3:114,F4:115,F5:116,F6:117,F7:118,F8:119,F9:120,F10:121,F12:123,ControlLeft:162,ControlRight:163,BracketRight:163,BracketLeft:161,PageUp:163,PageDown:161,Equal:163,Minus:161,AltLeft:164,AltRight:165}[e.code] || (e.key.length === 1 ? e.key.toUpperCase().charCodeAt(0) : 0));
+  const mappedVk = (e) => { for (const d of keyboardDevices) { const b = (d.bindings || []).find((x) => x.source && x.source.type === 'key' && x.source.code === e.code); if (b && b.target && b.target.type === 'key') return b.target.vk; } return keyboardDevices.length && !keyboardDevices.some((d) => d.passthrough) ? 0 : vk(e); };
   // keys held right now (vk codes): on tab/window switch the browser never delivers the key-up, so the host would see the key held forever
   // (e.g. S = reverse gear for good). Release everything when the page loses focus or is hidden.
   const held = new Map(), heldBtn = new Set();                          // physical key (e.code) -> vk that was sent on key-down (the key-up must release exactly that, even if e.key changed: Shift, layouts, caps lock)
@@ -127,17 +152,17 @@
   // Otherwise the game sees no XInput device and uses its own keyboard bindings. The header shows which one is in control.
   const inputEl = document.getElementById('inputmode'); let padKey = '', padSentAt = 0, padWasActive = false;
   const setMode = (txt, cls) => { inputEl.textContent = txt; inputEl.style.color = cls === 'pad' ? '#7ddf8a' : ''; };
-  const readPad = () => { const gps = navigator.getGamepads ? navigator.getGamepads() : []; for (const g of gps) if (g && g.connected) return g; return null; };
+  const readPad = () => { const gps = navigator.getGamepads ? navigator.getGamepads() : []; const selected = BlurInput.selectGamepad(gps, gamepadDevices); if (selected) return selected; if (!gamepadDevices.length) { for (const g of gps) if (g && g.connected) return [g, { passthrough: true, bindings: [], axes: [] }]; } return null; };
   const sendPad = () => {
-    const g = readPad(); const now = performance.now();
-    if (!g) { if (padWasActive) { padWasActive = false; padKey = ''; send(6, 0, 0, 0, 0); setMode('input: keyboard', 'kb'); } return; }
-    const B = g.buttons, ax = (i) => Math.max(-32767, Math.min(32767, Math.round((g.axes[i] || 0) * 32767)));
-    let btn = 0; const m = [[0, 0x1000], [1, 0x2000], [2, 0x4000], [3, 0x8000], [4, 0x100], [5, 0x200], [8, 0x20], [9, 0x10], [10, 0x40], [11, 0x80], [12, 0x1], [13, 0x2], [14, 0x4], [15, 0x8]];
-    for (const [i, bit] of m) if (B[i] && B[i].pressed) btn |= bit;
-    const lt = Math.round(((B[6] && B[6].value) || 0) * 255), rt = Math.round(((B[7] && B[7].value) || 0) * 255);
-    const lx = ax(0), ly = -ax(1), rx = ax(2), ry = -ax(3);                       // XInput Y axes point up
+    if (inputBlocked) return;
+    const selected = readPad(); const now = performance.now();
+    if (!selected) { if (padWasActive) { padWasActive = false; padKey = ''; send(6, 0, 0, 0, 0); setMode('input: keyboard', 'kb'); } return; }
+    const [g, d] = selected;
+    const state = BlurInput.gamepadState(g, d);
+    const btn = state.bits, lt = state.leftTrigger, rt = state.rightTrigger;
+    const lx = state.leftX, ly = state.leftY, rx = state.rightX, ry = state.rightY;
     const key = [btn, lt, rt, lx, ly, rx, ry].join(',');
-    if (key !== padKey || now - padSentAt > 250 || !padWasActive) { padKey = key; padSentAt = now; padWasActive = true; send(6, btn | (lt << 16) | (rt << 24), (lx & 0xffff) | (ly << 16), (rx & 0xffff) | (ry << 16), 1); setMode('input: controller (' + (g.id || 'gamepad').slice(0, 40) + ')', 'pad'); }
+    if (key !== padKey || now - padSentAt > 250 || !padWasActive) { if (key !== padKey) lastObservedInputAt = now; padKey = key; padSentAt = now; padWasActive = true; send(6, btn | (lt << 16) | (rt << 24), (lx & 0xffff) | (ly << 16), (rx & 0xffff) | (ry << 16), 1); setMode('input: controller (' + (g.id || 'gamepad').slice(0, 40) + ')', 'pad'); }
   };
   setInterval(sendPad, 8);
   window.addEventListener('gamepaddisconnected', () => sendPad());
@@ -145,14 +170,14 @@
   const store = { get(k, d) { try { const v = localStorage.getItem('blur.' + k); return v === null ? d : v === '1'; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem('blur.' + k, v ? '1' : '0'); } catch (e) {} } };
   const cbBar = document.getElementById('cb-bar'), cbLog = document.getElementById('cb-log'), cbHud = document.getElementById('cb-hud'), uiEl = document.getElementById('ui');
   const hudOn = () => !!(r.hud && r.hud.c && r.hud.c.style.display !== 'none');
-  const setHud = (on) => { if (on === hudOn() && r.hud) return; window.dispatchEvent(new KeyboardEvent('keydown', { code: 'F2' })); };      // renderer toggles its HUD on F2
+  const setHud = (on) => { if (on === hudOn() && r.hud) return; window.dispatchEvent(new Event('blur-toggle-hud')); };
   const applyPanels = () => { document.body.classList.toggle('hide-bar', !cbBar.checked); document.body.classList.toggle('hide-log', !cbLog.checked); store.set('bar', cbBar.checked); store.set('log', cbLog.checked); store.set('hud', cbHud.checked); };
   cbBar.checked = store.get('bar', true); cbLog.checked = store.get('log', false); cbHud.checked = location.hash.includes('hud=1') || store.get('hud', false);
   cbBar.onchange = cbLog.onchange = applyPanels; cbHud.onchange = () => { setHud(cbHud.checked); applyPanels(); }; applyPanels();
   if (cbHud.checked) setTimeout(() => { if (!hudOn()) setHud(true); }, 300);
   document.getElementById('menubtn').onclick = () => { uiEl.classList.toggle('open'); };
   document.addEventListener('click', (e) => { if (!uiEl.contains(e.target)) uiEl.classList.remove('open'); });
-  window.addEventListener('keydown', (e) => { if (e.code === 'F2') setTimeout(() => { cbHud.checked = hudOn(); applyPanels(); }, 0); });
+  window.addEventListener('blur-toggle-hud', () => setTimeout(() => { cbHud.checked = hudOn(); applyPanels(); }, 0));
   { const f = new URLSearchParams(location.search).get('fit'); if (f === 'contain' || f === 'fill') document.body.classList.add('fit-' + f); }   // ?fit=contain (letterbox) | fill (stretch); default cover = no bars, crops the edges on 16:10 screens
   // Fullscreen: F11 or double-click the picture. Escape is locked (Keyboard Lock API, Chrome) so the game's Esc menu works; leave fullscreen with F11 again.
   const toggleFs = async () => { try { if (document.fullscreenElement) { await document.exitFullscreen(); } else { await document.documentElement.requestFullscreen({ navigationUI: 'hide' }); if (navigator.keyboard && navigator.keyboard.lock) { try { await navigator.keyboard.lock(['Escape']); } catch (e) {} } canvas.focus(); } } catch (e) { log('fullscreen: ' + e.message); } };
@@ -161,11 +186,11 @@
     document.addEventListener('mousemove', wake); document.addEventListener('mousedown', wake); wake(); }
   document.getElementById('fsbtn').onclick = () => { toggleFs(); canvas.focus(); };
   document.addEventListener('fullscreenchange', () => { document.getElementById('fsbtn').textContent = document.fullscreenElement ? '⛶ Exit fullscreen' : '⛶ Fullscreen'; });
-  window.addEventListener('keydown', (e) => { if (e.code === 'F11') { e.preventDefault(); toggleFs(); } }, true);
-  window.addEventListener('keydown', (e) => { const k = vk(e); if (!e.repeat || !held.has(e.code)) { held.set(e.code, k); send(1, k); if (e.code === 'Backspace') send(1, 46); } if (e.code !== 'F12') e.preventDefault(); });
-  window.addEventListener('keyup', (e) => { const k = held.has(e.code) ? held.get(e.code) : vk(e); held.delete(e.code); send(2, k); if (e.code === 'Backspace') send(2, 46); e.preventDefault(); });
+  window.addEventListener('keydown', (e) => { const action = hotkeys.get(e.code); if (!action) return; e.preventDefault(); if (e.repeat) return; if (action === 'fullscreen') toggleFs(); else if (action === 'hud') window.dispatchEvent(new Event('blur-toggle-hud')); else if (action === 'release_inputs') releaseAll(); }, true);
+  window.addEventListener('keydown', (e) => { if (hotkeys.has(e.code)) return; if (inputBlocked) { e.preventDefault(); return; } const k = mappedVk(e); if (!k) { e.preventDefault(); return; } lastObservedInputAt = performance.now(); if (!e.repeat || !held.has(e.code)) { held.set(e.code, k); send(1, k); if (e.code === 'Backspace') send(1, 46); } if (e.code !== 'F12') e.preventDefault(); });
+  window.addEventListener('keyup', (e) => { if (hotkeys.has(e.code)) { e.preventDefault(); return; } const k = held.has(e.code) ? held.get(e.code) : mappedVk(e); held.delete(e.code); if (k) send(2, k); if (e.code === 'Backspace') send(2, 46); e.preventDefault(); });
   window.addEventListener('blur', releaseAll); window.addEventListener('focus', releaseAll); window.addEventListener('pagehide', releaseAll);
   document.addEventListener('visibilitychange', releaseAll);
-  canvas.addEventListener('mousemove', (e) => { const b = canvas.getBoundingClientRect(); send(3, Math.round((e.clientX - b.left) * (r.bb ? r.bb.lw : canvas.width) / b.width), Math.round((e.clientY - b.top) * (r.bb ? r.bb.lh : canvas.height) / b.height)); });
-  canvas.addEventListener('mousedown', (e) => { canvas.focus(); heldBtn.add(e.button); send(4, e.button, 1); }); canvas.addEventListener('mouseup', (e) => { heldBtn.delete(e.button); send(4, e.button, 0); });
+  canvas.addEventListener('mousemove', (e) => { if (inputBlocked) return; const b = canvas.getBoundingClientRect(); send(3, Math.round((e.clientX - b.left) * (r.bb ? r.bb.lw : canvas.width) / b.width), Math.round((e.clientY - b.top) * (r.bb ? r.bb.lh : canvas.height) / b.height)); });
+  canvas.addEventListener('mousedown', (e) => { canvas.focus(); if (inputBlocked) return; heldBtn.add(e.button); send(4, e.button, 1); }); canvas.addEventListener('mouseup', (e) => { if (inputBlocked) return; heldBtn.delete(e.button); send(4, e.button, 0); });
 })();</script></body></html>

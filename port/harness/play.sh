@@ -11,8 +11,9 @@ if [ -z "$BLUR_PLAYER_NAME" ]; then
     NAME="$(printf '%s' "${NAME:-$DEF}" | tr -cd 'A-Za-z0-9 _-' | cut -c1-15)"; [ -n "$NAME" ] || NAME=player
     printf '%s' "$NAME" > .playername
   fi
-  export BLUR_PLAYER_NAME="$(cat .playername)"
+  BLUR_PLAYER_NAME="$(<.playername)"
+  export BLUR_PLAYER_NAME
 fi
 # skip the first-run "Online Account" dialog: title Enter, then Down + Enter (= Skip). BLUR_NOSKIP=1 leaves the dialog alone; BLUR_KEYS overrides.
 if [ -z "$BLUR_NOSKIP" ] && [ -z "$BLUR_KEYS" ]; then export BLUR_SEEDACCT=clear BLUR_KEYS="Enter@L:StopScoreboardRequests+6s,Down@L:ReadOnlineAccountDetails+8s,Enter@L:ReadOnlineAccountDetails+10s"; fi
-BLUR_PAR=${BLUR_PAR:-1} BLUR_WEB=$PORT BLUR_RECOMP=1 exec $BIN ../../game/extracted/BLUR/Blur.exe
+BLUR_PAR=${BLUR_PAR:-1} BLUR_WEB=$PORT BLUR_RECOMP=1 exec $BIN "${BLUR_EXE:-../../game/extracted/BLUR/Blur.exe}"

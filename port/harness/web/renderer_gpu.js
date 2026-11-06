@@ -123,7 +123,7 @@ class D3D9GpuRenderer {
     this.blitMod = dev.createShaderModule({ code: BLIT_WGSL }); this.clearMod = dev.createShaderModule({ code: CLEAR_WGSL }); this.ffMod = dev.createShaderModule({ code: FF_VS_WGSL });
     this.nearest = dev.createSampler({ magFilter: 'nearest', minFilter: 'nearest' }); this.linear = dev.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     this.enc = dev.createCommandEncoder();
-    window.addEventListener('keydown', (e) => { if (e.code === 'F2') { const first = !this.hud; this.initHud(); if (!first) this.hud.c.style.display = this.hud.c.style.display === 'none' ? '' : 'none'; } });
+    window.addEventListener('blur-toggle-hud', () => { const first = !this.hud; this.initHud(); if (!first) this.hud.c.style.display = this.hud.c.style.display === 'none' ? '' : 'none'; });
     this.ffRec = { ff: true, stage: 'vs', cbVec: 1, inMask: 1 | 1 << 8, outMask: 1, texTypes: {}, texMask: 0, flags: 0, module: this.ffMod, key: 'ff', pid: 0, regs: [] };
     return this;
   }

@@ -114,7 +114,7 @@ class D3D9Renderer {
     // #mirror=half always skips them on alternate frames, #mirror=auto does it only while the present-to-present interval stays above ~18 ms, #mirror=full never. Default: auto.
     this.mirrorMode = (/mirror=(half|auto|full)/.exec(location.hash) || [0, 'auto'])[1]; this.mirrorOn = false; this.mirrorTouched = []; this.mirrorIv = 16.7; this.mirrorLast = 0; this.mirrorFrame = 0;
     this.diag = /diag=1/.test(location.hash); this.diagFrames = []; this.rtCount = {};      // #diag=1: per-frame draw counts by render target (see tools/shot/diag.js)
-    window.addEventListener('keydown', (e) => { if (e.code === 'F2') { const first = !this.hud; this.initHud(); if (!first) this.hud.c.style.display = this.hud.c.style.display === 'none' ? '' : 'none'; } });
+    window.addEventListener('blur-toggle-hud', () => { const first = !this.hud; this.initHud(); if (!first) this.hud.c.style.display = this.hud.c.style.display === 'none' ? '' : 'none'; });
   }
   initDefaults() {
     const r = this.rs; r[7] = 1; r[14] = 1; r[23] = 4; r[22] = 3; r[19] = 2; r[20] = 1; r[168] = r[190] = r[191] = r[192] = 15; r[171] = 1; r[209] = 1; r[207] = 2; r[208] = 1;
