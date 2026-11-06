@@ -26,7 +26,7 @@ case "$SECS" in *[!0-9]*|'') echo "seconds must be a positive integer" >&2; exit
   mkdir -p "$WORK/save_$TAG"
   [ ! -d "$H/save" ] || cp -R "$H/save/." "$WORK/save_$TAG/"
 }
-K="Enter@L:StopScoreboardRequests+60,Down@L:ReadOnlineAccountDetails+150,Enter@L:ReadOnlineAccountDetails+175,Enter@L:ReadOnlineAccountDetails+260,Enter@L:ReadOnlineAccountDetails+340,Enter@L:ReadOnlineAccountDetails+440"
+K="Enter@45,Enter@L:StopScoreboardRequests+60,Down@L:ReadOnlineAccountDetails+150,Enter@L:ReadOnlineAccountDetails+175,Enter@L:ReadOnlineAccountDetails+260,Enter@L:ReadOnlineAccountDetails+340,Enter@L:ReadOnlineAccountDetails+440"
 (
   cd "$H"
   exec env BLUR_PAR=1 BLUR_RECOMP=1 BLUR_WEB="$PORT" BLUR_SEEDACCT=0 BLUR_SAVEDIR="$WORK/save_$TAG" BLUR_KEYS="$K" "$@" "${BIN:-./blurrt}" ../../game/extracted/BLUR/Blur.exe
