@@ -13,6 +13,15 @@ set -euo pipefail
 TAG=${1:?tag}; FRAG=${2:-}; SECS=${3:-230}; shift 3
 HERE=$(cd "$(dirname "$0")" && pwd); H=$HERE/../../port/harness
 WORK=${WORK:-${XDG_CACHE_HOME:-$HOME/.cache}/blur-web/racedrive}; PORT=${PORT:-8792}; mkdir -p "$WORK/shots"
+command -v node >/dev/null || { echo "node is required" >&2; exit 1; }
+node -e 'require("puppeteer-core")' >/dev/null 2>&1 || {
+  echo "puppeteer-core is missing; run 'bun install --frozen-lockfile' in tools/shot" >&2
+  exit 1
+}
+CHROMIUM=${CHROMIUM:-$(command -v chromium || command -v microsoft-edge || true)}
+[ -x "$CHROMIUM" ] || { echo "CHROMIUM must name an executable Chromium-family browser" >&2; exit 1; }
+case "$SECS" in *[!0-9]*|'') echo "seconds must be a positive integer" >&2; exit 1;; esac
+[ "$SECS" -gt 0 ] || { echo "seconds must be a positive integer" >&2; exit 1; }
 [ -d "$WORK/save_$TAG/userprofile" ] || {
   mkdir -p "$WORK/save_$TAG"
   [ ! -d "$H/save" ] || cp -R "$H/save/." "$WORK/save_$TAG/"
@@ -25,7 +34,8 @@ K="Enter@L:StopScoreboardRequests+60,Down@L:ReadOnlineAccountDetails+150,Enter@L
 HP=$!
 cleanup() {
   trap - EXIT INT TERM
-  kill "$HP" 2>/dev/null || true
+  kill -INT "$HP" 2>/dev/null || true
+  timeout 10s tail --pid="$HP" -f /dev/null >/dev/null 2>&1 || kill -KILL "$HP" 2>/dev/null || true
   wait "$HP" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
