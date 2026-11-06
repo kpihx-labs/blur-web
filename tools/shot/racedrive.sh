@@ -14,7 +14,7 @@ TAG=${1:?tag}; FRAG=${2:-}; SECS=${3:-230}; shift 3
 HERE=$(cd "$(dirname "$0")" && pwd); H=$HERE/../../port/harness
 WORK=${WORK:-${XDG_CACHE_HOME:-$HOME/.cache}/blur-web/racedrive}; PORT=${PORT:-8792}; mkdir -p "$WORK/shots"
 command -v node >/dev/null || { echo "node is required" >&2; exit 1; }
-node -e 'require("puppeteer-core")' >/dev/null 2>&1 || {
+(cd "$HERE" && node -e 'require("puppeteer-core")') >/dev/null 2>&1 || {
   echo "puppeteer-core is missing; run 'bun install --frozen-lockfile' in tools/shot" >&2
   exit 1
 }
