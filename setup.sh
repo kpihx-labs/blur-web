@@ -143,10 +143,10 @@ elif [ "$OS" = Darwin ]; then
   fi
   note "unicorn $(pkg-config --modversion unicorn 2>/dev/null || echo ?), ffmpeg, spirv-cross present"
 elif [ "$OS" = Linux ]; then
-  have apt-get || note "this script only knows apt; install clang, lld, make, cmake, pkg-config, git, curl, xz, python3-venv, libavformat/libavcodec/libavutil/libswresample dev and SPIRV-Cross (c-shared) yourself"
+  have apt-get || note "this script only knows apt; install clang, lld, make, cmake, pkg-config, git, curl, xz, python3, uv, libavformat/libavcodec/libavutil/libswresample dev and SPIRV-Cross (c-shared) yourself"
   if have apt-get; then
     need=""
-    for p in clang lld make cmake pkg-config git curl xz-utils python3-venv python3-pip libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libspirv-cross-c-shared-dev libvulkan-dev spirv-headers bison flex p7zip-full; do
+    for p in clang lld make cmake pkg-config git curl xz-utils python3 libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libspirv-cross-c-shared-dev libvulkan-dev spirv-headers bison flex p7zip-full; do
       dpkg -s "$p" >/dev/null 2>&1 || need="$need $p"
     done
     if [ -n "$need" ]; then
@@ -164,9 +164,10 @@ have curl || die "curl not found"
 # Use a python3 that actually runs: a pyenv/Intel build on an Apple-silicon Mac ("Bad CPU type") or a broken shim is common
 PYTHON3=""
 for c in python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-  if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys, venv; assert sys.version_info >= (3, 8)' >/dev/null 2>&1; then PYTHON3="$(command -v "$c")"; break; fi
+  if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; assert sys.version_info >= (3, 8)' >/dev/null 2>&1; then PYTHON3="$(command -v "$c")"; break; fi
 done
-[ -n "$PYTHON3" ] || die "no working python3 (3.8 or newer, with the venv module) found; install one (brew install python / apt install python3-venv)"
+[ -n "$PYTHON3" ] || die "no working python3 (3.8 or newer) found"
+have uv || die "uv is required for the isolated Python environment"
 note "python3: $PYTHON3"
 [ -n "$BREW_PREFIX" ] || { have brew && BREW_PREFIX="$(brew --prefix 2>/dev/null || true)"; }
 
@@ -253,10 +254,10 @@ fi
 
 # --------------------------------------------------------------------------------------------------- 5. python
 say "5/9 python environment (Capstone, used by the lifter)"
-if [ ! -x "$ROOT/.venv/bin/python" ] || ! "$ROOT/.venv/bin/python" -c pass >/dev/null 2>&1; then rm -rf "$ROOT/.venv"; "$PYTHON3" -m venv "$ROOT/.venv"; fi
+if [ ! -x "$ROOT/.venv/bin/python" ] || ! "$ROOT/.venv/bin/python" -c pass >/dev/null 2>&1; then uv venv --clear --python "$PYTHON3" "$ROOT/.venv"; fi
 export PATH="$ROOT/.venv/bin:$PATH"           # later steps and helper scripts that call plain python3 get this one
 PY="$ROOT/.venv/bin/python"
-"$PY" -c 'import capstone' 2>/dev/null || "$PY" -m pip install -q --disable-pip-version-check capstone
+"$PY" -c 'import capstone' 2>/dev/null || uv pip install --python "$PY" capstone
 note "capstone $("$PY" -c 'import capstone;print(capstone.__version__)')"
 
 # --------------------------------------------------------------------------------------------------- 6. bootstrap runtime
