@@ -409,7 +409,20 @@ static uint32_t t_0_(Ctx *c, uint32_t *a) { (void)c; (void)a; return 0; }
 BKR(BinkOpen, h_BinkOpen) BKR(BinkClose, bl_BinkClose) BKR(BinkGetFrameBuffersInfo, h_BinkGetFrameBuffersInfo) BKR(BinkRegisterFrameBuffers, t_0_)
 BKR(BinkDoFrame, h_BinkDoFrame) BKR(BinkNextFrame, h_BinkNextFrame) BKR(BinkWait, t_0_) BKR(BinkShouldSkip, t_0_) BKR(BinkPause, bl_BinkPause)
 BKR(BinkGetRects, t_1) BKR(BinkSetVolume, bl_BinkSetVolume) BKR(BinkOpenTrack, bl_BinkOpenTrack) BKR(BinkGetTrackData, bl_BinkGetTrackData)
-BKR(BinkGetTrackID, bl_BinkGetTrackID) BKR(BinkCloseTrack, bl_BinkCloseTrack)
+static uint32_t r_BinkGetTrackID(Ctx *c, uint32_t *a) {
+    if (getenv("BINK_FAKE")) return bl_BinkGetTrackID(c, a);
+    bk_init_host(c); uint32_t result = bk_BinkGetTrackID(a);
+    if (getenv("BLUR_BINKTRACKLOG")) {
+        extern uint64_t g_frames_pub;
+        static struct { uint32_t caller, handle, index, result, thread; uint64_t count, first_frame, last_frame; } rows[32];
+        static int nrows; int i = 0;
+        for (; i < nrows; i++) if (rows[i].caller == g_api_ret && rows[i].handle == a[0] && rows[i].index == a[1] && rows[i].result == result && rows[i].thread == (uint32_t)c->cur) break;
+        if (i == nrows && nrows < (int)(sizeof rows / sizeof rows[0])) { rows[i].caller = g_api_ret; rows[i].handle = a[0]; rows[i].index = a[1]; rows[i].result = result; rows[i].thread = (uint32_t)c->cur; rows[i].first_frame = g_frames_pub; nrows++; }
+        if (i < nrows) { rows[i].count++; rows[i].last_frame = g_frames_pub; if (rows[i].count == 1 || (rows[i].count & (rows[i].count - 1)) == 0) fprintf(stderr, "[binktrack] caller=%08x handle=%08x index=%u result=%u thread=%u count=%llu frames=%llu..%llu\n", rows[i].caller, rows[i].handle, rows[i].index, rows[i].result, rows[i].thread, (unsigned long long)rows[i].count, (unsigned long long)rows[i].first_frame, (unsigned long long)rows[i].last_frame); }
+    }
+    return result;
+}
+BKR(BinkCloseTrack, bl_BinkCloseTrack)
 static const HleDef real[] = {
     E(GetAdaptersInfo,2), E(CreateDirectoryA,2), E(CreateDirectoryW,2), E(CreateFileA,7), E(CreateFileW,7), E(ReadFile,5), E(WriteFile,5), E(SetFilePointer,4), E(GetFileSize,2), E(GetFileAttributesA,1),
     E(FindFirstFileA,2), E(FindNextFileA,2), E(FindClose,1),

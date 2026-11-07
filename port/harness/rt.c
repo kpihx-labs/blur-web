@@ -27,6 +27,9 @@ static Ctx *C;
 int rt_trace;
 void rt_enter(Cpu *c, uint32_t addr) {
     if (ring_on) { int t = C->cur; uint32_t i = ring_i[t]++ & (RING_N - 1); ring_a[t][i] = addr; ring_s[t][i] = c->esp; return; }
+    static uint32_t only[16]; static int nonly = -1; static uint32_t seen[16];
+    if (nonly < 0) { nonly = 0; const char *p = getenv("RT_TRACE_ADDR"); while (p && *p && nonly < 16) { only[nonly++] = (uint32_t)strtoul(p, (char **)&p, 16); if (*p == ',') p++; } }
+    if (nonly) { for (int i = 0; i < nonly; i++) if (only[i] == addr) { uint32_t n = ++seen[i]; if (n <= 16 || (n & (n - 1)) == 0) fprintf(stderr, "[fnaddr] %08x #%u t%d eax=%08x ecx=%08x edx=%08x ebx=%08x esi=%08x edi=%08x\n", addr, n, C->cur, c->eax, c->ecx, c->edx, c->ebx, c->esi, c->edi); } return; }
     static uint64_t n; if (n++ < (getenv("RT_TRACE_MAX") ? strtoull(getenv("RT_TRACE_MAX"), 0, 0) : 2000)) { static int full = -1; if (full < 0) full = getenv("RT_TRACE_FULL") != NULL; if (full) fprintf(stderr, "[fn] %08x esp=%08x eax=%08x ecx=%08x edx=%08x ebx=%08x ebp=%08x esi=%08x edi=%08x fl=%d%d%d%d%d [esp]=%08x\n", addr, c->esp, c->eax, c->ecx, c->edx, c->ebx, c->ebp, c->esi, c->edi, c->fl.cf, c->fl.pf, c->fl.zf, c->fl.sf, c->fl.of, M32(c->esp)); else fprintf(stderr, "[fn] %08x esp=%08x eax=%08x esi=%08x\n", addr, c->esp, c->eax, c->esi); }
 }
 static GuestFn *htab; static uint32_t *hkey; static uint32_t hmask;
@@ -92,10 +95,24 @@ static void finish_process(Ctx *c) {
     if (getenv("BLUR_SYNCSTAT")) hle_sync_report(c);
     if (getenv("BLUR_DUMPAT")) { uint32_t a = (uint32_t)strtoul(getenv("BLUR_DUMPAT"), 0, 16), n = 64; const char *q = strchr(getenv("BLUR_DUMPAT"), ','); if (q) n = (uint32_t)strtoul(q + 1, 0, 10);
         for (uint32_t i = 0; i < n; i += 8) { fprintf(stderr, "[dumpat] %08x:", a + 4 * i); for (uint32_t k = 0; k < 8 && i + k < n; k++) fprintf(stderr, " %08x", M32(a + 4 * (i + k))); fprintf(stderr, "\n"); } }
+    if (getenv("BLUR_FINDSTR")) {       // BLUR_FINDSTR=ascii[,ascii...]: locate runtime-loaded keys without writing the whole guest heap
+        char list[1024]; snprintf(list, sizeof list, "%s", getenv("BLUR_FINDSTR"));
+        for (char *save = NULL, *s = strtok_r(list, ",", &save); s; s = strtok_r(NULL, ",", &save)) {
+            size_t n = strlen(s), hits = 0; uint8_t *base = G + 0x20000000u, *end = G + c->heap_next, *p = base;
+            while (n && p + n <= end && hits < 32) { uint8_t *q = memmem(p, (size_t)(end - p), s, n); if (!q) break;
+                uint32_t a = (uint32_t)(q - G); fprintf(stderr, "[findstr] %s @%08x context:", s, a);
+                uint32_t lo = a >= 16 ? a - 16 : a; for (uint32_t k = 0; k < (uint32_t)n + 32 && lo + k < c->heap_next; k++) fprintf(stderr, " %02x", G[lo + k]); fprintf(stderr, "\n");
+                hits++; p = q + 1; }
+            fprintf(stderr, "[findstr] %s hits=%zu heap_end=%08x\n", s, hits, c->heap_next);
+        }
+    }
     if (getenv("BLUR_FINDPTR")) {       // BLUR_FINDPTR=hexA,hexB: list every aligned dword in the guest heap/VirtualAlloc area equal to one of the values, with 16 words of context before/after
         uint32_t v[4]; int nv = 0; const char *p = getenv("BLUR_FINDPTR"); while (*p && nv < 4) { v[nv++] = (uint32_t)strtoul(p, (char **)&p, 16); if (*p == ',') p++; }
+        int after = getenv("BLUR_FINDPTR_AFTER") ? atoi(getenv("BLUR_FINDPTR_AFTER")) : 8; if (after < 8) after = 8; if (after > 1024) after = 1024;
         int hits = 0; for (uint64_t a = 0x20000000u; a < 0x60000000u && hits < 80; a += 4) { uint32_t w = M32((uint32_t)a); for (int i = 0; i < nv; i++) if (w == v[i]) { hits++;
-            fprintf(stderr, "[findptr] %08x = %08x  words@-0x40..:", (uint32_t)a, w); for (int k = -16; k < 8; k++) fprintf(stderr, " %08x", M32((uint32_t)a + 4 * (uint32_t)k)); fprintf(stderr, "\n"); } } }
+            if (after == 8) { fprintf(stderr, "[findptr] %08x = %08x  words@-0x40..:", (uint32_t)a, w); for (int k = -16; k < 8; k++) fprintf(stderr, " %08x", M32((uint32_t)a + 4 * (uint32_t)k)); fprintf(stderr, "\n"); }
+            else for (int k = -16; k < after; k += 8) { fprintf(stderr, "[findptr] %08x %+05d:", (uint32_t)a, 4 * k); for (int q = 0; q < 8 && k + q < after; q++) fprintf(stderr, " %08x", M32((uint32_t)a + 4 * (uint32_t)(k + q))); fprintf(stderr, "\n"); }
+        } } }
     { extern void d3d9_texaudit(Ctx *, const char *); extern void io_report(void); if (getenv("BLUR_SYNCSTAT")) io_report(); d3d9_texaudit(c, "exit"); } heapchk_scan(c, "at exit");
     d3d9_report(c); prof_report(c);
     fprintf(stderr, "[heap] %u MB of the guest heap used\n", (c->heap_next - 0x20000000u) >> 20);
@@ -354,6 +371,7 @@ static void pace_present(Ctx *c) {
     framestat();
     static uint32_t sent; static uint32_t pace_epoch = ~0u;
     if (pace_epoch != g_net_epoch) { pace_epoch = g_net_epoch; sent = 0; g_net_ack = 0; }      // a new viewer counts its acks from 0: restart the lead counter or the host would wait 100 ms per frame for acks that never catch up
+    if (getenv("BLUR_PREWARM") && !net_client_connected()) return;       // bootstrap without transport pacing; normal pacing resumes when the viewer attaches
     // viewer back-pressure: the page acks every presented frame; do not run more than BLUR_MAXLAG (4) frames ahead of it (it would only queue them in browser memory = latency). Gives up after 100 ms (hidden tab, old page).
     if (g_net_ack_seen && net_client_connected()) { static int maxlag = -1; if (maxlag < 0) maxlag = getenv("BLUR_MAXLAG") ? atoi(getenv("BLUR_MAXLAG")) : 4; sent++;
         if (g_det_on && (int32_t)(sent - g_net_ack) > maxlag) { uint64_t until = real_us() + 100000; while ((int32_t)(sent - g_net_ack) > maxlag && real_us() < until) usleep(200); }   // BLUR_DET: wait in REAL time without yielding/ticking the virtual clock, otherwise the number of virtual ticks (= guest progress) would depend on when the viewer's acks arrive
@@ -617,7 +635,7 @@ void rt_main(Ctx *c) {
     C = c;
     if (getenv("BLUR_DUMPMEM")) { FILE *df = fopen(getenv("BLUR_DUMPMEM"), "wb"); if (df) { extern uint8_t *G; fwrite(G + 0x400000, 1, 0x1c70000, df); fclose(df); fprintf(stderr, "[dump] guest 0x400000+0x1c70000 -> %s\n", getenv("BLUR_DUMPMEM")); } }
     if (getenv("BLUR_DET")) { g_det_step = atof(getenv("BLUR_DET")); g_time_base = 0; g_det_on = 1; g_det_ticks = 0; audio_clock_us = now_us; fprintf(stderr, "[det] deterministic clock: %g us per API call\n", g_det_step); }
-    prof_init(); if (nhook < 0) hook_init(); build_table(); build_fast(); cov_init(); ring_on = getenv("BLUR_RING") != NULL; rt_trace = getenv("RT_TRACE") != NULL || ring_on; cont_addr = cont_stub_addr(c);
+    prof_init(); if (nhook < 0) hook_init(); build_table(); build_fast(); cov_init(); ring_on = getenv("BLUR_RING") != NULL; rt_trace = getenv("RT_TRACE") != NULL || getenv("RT_TRACE_ADDR") != NULL || ring_on; cont_addr = cont_stub_addr(c);
     if (getenv("BLUR_SCHED_NOFILTER")) sched_filter = 0;
 #if defined(__aarch64__)
     coro_mode = !getenv("BLUR_NOCORO");
@@ -639,6 +657,10 @@ void rt_main(Ctx *c) {
 #endif
     { pthread_t wd; pthread_create(&wd, NULL, watchdog, c); pthread_detach(wd); }
     if (!getenv("BLUR_WATCHW_AFTER_FRAME1")) ww_arm();
+    if (rt_table_n == 0 && !getenv("BLUR_ALLOW_EMPTY_RECOMP")) {
+        fprintf(stderr, "[rt] no recompiled functions are registered; refusing BLUR_RECOMP mode (set BLUR_ALLOW_EMPTY_RECOMP=1 only for an explicit interpreter diagnostic)\n");
+        exit(2);
+    }
     fprintf(stderr, "[rt] %u recompiled functions; entering the game at %08x on the recompiled path\n", rt_table_n, g_oep_addr);
     Thread *t0 = &c->threads[0]; Cpu *cpu = calloc(1, sizeof(Cpu)); t0->cpu = cpu; init_cpu(cpu, t0->teb);
     cpu->eax = c->oep_regs[0]; cpu->ecx = c->oep_regs[1]; cpu->edx = c->oep_regs[2]; cpu->ebx = c->oep_regs[3]; cpu->esp = c->oep_regs[4]; cpu->ebp = c->oep_regs[5]; cpu->esi = c->oep_regs[6]; cpu->edi = c->oep_regs[7];

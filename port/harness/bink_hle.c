@@ -112,7 +112,7 @@ uint32_t bk_BinkDoFrame(const uint32_t *a) {
 
 uint32_t bk_BinkNextFrame(const uint32_t *a) {
     Bk *b = find(a[0]); if (!b) return 0; uint32_t f = R32(b->g + 12), n = R32(b->g + 8);
-    W32(b->g + 12, f < n ? f + 1 : 1); return 0;
+    W32(b->g + 12, bk_next_frame_number(f, n, b->flags)); return 0;
 }
 uint32_t bk_BinkWait(const uint32_t *a) {            // nonzero = the next frame is not due yet
     Bk *b = find(a[0]); if (!b) return 0;

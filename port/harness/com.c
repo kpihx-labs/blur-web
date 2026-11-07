@@ -62,7 +62,12 @@ void input_pump(Ctx *c) {                  // drain browser input into g_keys; B
       double now = (double)real_us() / 1e6 - t0; extern uint64_t g_frames_pub; double fr = (double)g_frames_pub;       // "Key@12.5" = seconds after the first poll, "Key@f7300" = at game frame 7300 (robust when the machine is slow)
       for (int i = 0; i < n; i++) { extern long lua_binding_first_frame(const char *); int fb = ev[i].at < 0; if (ev[i].at <= -1e8) { extern double lua_binding_first_time(const char *); if (ev[i].secs) { double tt = lua_binding_first_time(ev[i].trig); if (tt < 0) continue; ev[i].at = tt + ev[i].dsec - t0; fb = 0; } else { long ff = lua_binding_first_frame(ev[i].trig); if (ff < 0) continue; ev[i].at = -(double)(ff + ev[i].delay) - 1; fb = 1; } } double a = fb ? -ev[i].at - 1 : ev[i].at, cur = fb ? fr : now, hold = ev[i].hold > 0 ? ev[i].hold : fb ? 8 : 0.35, grace = fb ? 20 : 0.7;
         uint8_t d = (cur >= a && cur < a + hold) ? 0x80 : 0; { static uint8_t shown[256]; if (d && !shown[i]) { shown[i] = 1; fprintf(stderr, "[keys] event %d dik %02x pressed at frame %llu\n", i, ev[i].dik, (unsigned long long)g_frames_pub); } } if (d || cur >= a + hold) { if (d) g_keys[ev[i].dik] = 0x80; else if (cur < a + grace) g_keys[ev[i].dik] = 0; } } }
-    if (getenv("BLUR_AUTOPRESS")) { static uint64_t n; n++; uint8_t d = ((n / 400) % 4 == 1) ? 0x80 : 0; g_keys[0x1c] = d; g_keys[0x39] = d; }
+    if (getenv("BLUR_AUTOPRESS")) {
+        static uint64_t n; n++; uint8_t d = ((n / 400) % 4 == 1) ? 0x80 : 0;
+        g_keys[0x1c] = d; g_keys[0x39] = d;
+        g_pad.active = 1;
+        if (d) g_pad.btn |= 0x1010; else g_pad.btn &= (uint16_t)~0x1010;
+    }
 }
 static uint32_t dev_getstate(Ctx *c, uint32_t *a) { input_pump(c);
     if (a[1] == 16 || a[1] == 20) {                                  // DIMOUSESTATE / DIMOUSESTATE2: lX, lY, lZ, buttons

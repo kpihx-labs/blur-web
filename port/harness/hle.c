@@ -509,11 +509,11 @@ void hle_thread_exit(Ctx *c, Thread *t) {
 // BLUR_SYNCSTAT=1: at exit list every event/semaphore/mutex: who created it, how often it was signalled / acquired, and which threads are blocked on it
 void hle_sync_report(Ctx *c) {
     static const char *tn[] = {"none", "event", "mutex", "semaphore", "thread", "file", "find"};
-    fprintf(stderr, "[sync] handle  type       manual signaled count  created-by  sets      acquires   blocked-threads\n");
+    fprintf(stderr, "[sync] handle  type       manual signaled count  owner     created-by  sets      acquires   blocked-threads\n");
     for (int i = 1; i < c->nhandles; i++) { Handle *o = &c->handles[i]; if (o->type != H_EVENT && o->type != H_SEMAPHORE && o->type != H_MUTEX) continue;
         uint32_t h = 0x100 + 4 * (uint32_t)i; char w[200] = ""; int k = 0;
         for (int t = 0; t < c->nthreads; t++) { Thread *th = &c->threads[t]; if (th->used && !th->done && th->blocked && th->last_a0 == h && th->last_api && (!strncmp(th->last_api, "WaitFor", 7) || !strncmp(th->last_api, "SignalObjectAndWait", 19))) k += snprintf(w + k, sizeof w - (size_t)k, " t%d", t); }
-        fprintf(stderr, "[sync] %05x  %-9s  %d      %d        %-5d  %08x    %-9llu %-9llu %s", h, tn[o->type], o->manual, o->signaled, o->count, o->cret, (unsigned long long)o->nset, (unsigned long long)o->nacq, w);
+        fprintf(stderr, "[sync] %05x  %-9s  %d      %d        %-5d  %08x  %08x    %-9llu %-9llu %s", h, tn[o->type], o->manual, o->signaled, o->count, o->owner, o->cret, (unsigned long long)o->nset, (unsigned long long)o->nacq, w);
         for (int k = 0; k < 4; k++) if (o->setter[k]) fprintf(stderr, "  set@%08x x%u", o->setter[k], o->setter_n[k]); fprintf(stderr, "\n"); }
 }
 // earliest timer deadline among blocked threads (0 = none): lets the scheduler sleep instead of polling when every thread waits
